@@ -1,0 +1,19 @@
+name: Test Ourbit Kline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ourbit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Ourbit Kline API
+        run: |
+          echo "Testing Ourbit Futures Kline API..."
+
+          curl -i -G \
+            "https://contract.ourbit.com/api/v1/contract/kline/BTC_USDT" \
+            --data-urlencode "interval=Min60" \
+            --data-urlencode "start=1758067200000" \
+            --data-urlencode "end=1758070800000"
