@@ -1,62 +1,80 @@
 import os
 import requests
+import traceback
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-OURBIT_URL = "https://contract.ourbit.com/api/v1/contract/ticker"
-
-
-def telegram(message):
+def send_telegram(text):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-
-    response = requests.post(
+    requests.post(
         url,
-        data={
-            "chat_id": CHAT_ID,
-            "text": message
-        },
+        data={"chat_id": CHAT_ID, "text": text},
         timeout=20
     )
-
-    response.raise_for_status()
-
 
 def main():
+    try:
+        print("STEP 1")
 
-    if not TOKEN or not CHAT_ID:
-        raise Exception("Telegram secrets are missing")
+        if not TOKEN:
+            raise Exception("TELEGRAM_BOT_TOKEN is missing")
 
-    # Test Ourbit Futures
-    response = requests.get(
-        OURBIT_URL,
-        timeout=20
-    )
+        if not CHAT_ID:
+            raise Exception("TELEGRAM_CHAT_ID is missing")
 
-    response.raise_for_status()
+        print("STEP 2")
 
-    data = response.json()
+        response = requests.get(
+            "https://contract.ourbit.com/api/v1/contract/ticker",
+            timeout=20
+        )
 
-    # فقط تعداد اطلاعات دریافتی را گزارش می‌کنیم
-    if isinstance(data, dict):
-        content = data.get("data", data.get("result", data))
-    else:
-        content = data
+        print("STEP 3")
+        print("HTTP:", response.status_code)
 
-    if isinstance(content, list):
-        count = len(content)
-    else:
-        count = 1
+        response.raise_for_status()
 
-    message = (
-        "🤖 ربات Ourbit فعال شد ✅\n\n"
-        "📡 اتصال به Ourbit Futures برقرار است.\n"
-        f"📊 اطلاعات دریافت‌شده: {count}\n\n"
-        "🧪 تست اولیه موفق بود."
-    )
+        data = response.json()
 
-    telegram(message)
+        if isinstance(data, dict):
+            content = data.get("data", data.get("result", data))
+        else:
+            content = data
 
+        if isinstance(content, list):
+            count = len(content)
+        else:
+            count = 1
+
+        send_telegram(
+            "🧪 تست ربات\n\n"
+            "✅ GitHub Actions اجرا شد\n"
+            "✅ Telegram Secret پیدا شد\n"
+            f"📡 Ourbit HTTP: {response.status_code}\n"
+            f"📊 تعداد اطلاعات: {count}"
+        )
+
+        print("SUCCESS")
+
+    except Exception as e:
+
+        error = traceback.format_exc()
+
+        print(error)
+
+        if TOKEN and CHAT_ID:
+            try:
+                send_telegram(
+                    "❌ خطای ربات\n\n"
+                    f"{type(e).__name__}: {e}\n\n"
+                    "جزئیات:\n"
+                    f"{error[-2500:]}"
+                )
+            except Exception:
+                pass
+
+        raise
 
 if __name__ == "__main__":
     main()
