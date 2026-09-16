@@ -1,137 +1,352 @@
 import os
 import time
 import requests
+from datetime import datetime, timezone
 
-OURBIT_URL = "https://contract.ourbit.com"
+# =========================
+# SETTINGS
+# =========================
+
+OURBIT_BASE = "https://contract.ourbit.com"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-TOP_SYMBOLS = 100
-KLINE_LIMIT = 120
+TIMEFRAME = "Min60"          # 1 hour
 RSI_PERIOD = 14
+TOP_CONTRACTS = 100
+CANDLE_COUNT = 130
 
-# درصد نزدیکی قیمت به حمایت/مقاومت
-LEVEL_DISTANCE = 0.006
+# Price must be this close to support/resistance
+LEVEL_DISTANCE = 0.006       # 0.6%
+
+# Pivot settings
+PIVOT_LEFT = 3
+PIVOT_RIGHT = 3
+
+REQUEST_TIMEOUT = 20
 
 
-def get_json(url, params=None):
-    response = requests.get(url, params=params, timeout=20)
-    response.raise_for_status()
-    data = response.json()
+# =========================
+# HTTP SESSION
+# =========================
 
-    if isinstance(data, dict) and data.get("code") not in (None, 200):
-        raise RuntimeError(f"Ourbit error: {data}")
+session = requests.Session()
 
-    return data
 
+# =========================
+# TELEGRAM
+# =========================
 
 def send_telegram(message):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram secrets are missing.")
-        return
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    response = requests.post(
+    response = session.post(
         url,
         data={
             "chat_id": TELEGRAM_CHAT_ID,
             "text": message
         },
-        timeout=20
+        timeout=REQUEST_TIMEOUT
     )
 
     response.raise_for_status()
+    return True
 
 
-def get_tickers():
-    data = get_json(
-        f"{OURBIT_URL}/api/v1/contract/ticker"
+# =========================
+# OURBIT REQUEST
+# =========================
+
+def ourbit_get(path, params=None):
+    url = OURBIT_BASE + path
+
+    response = session.get(
+        url,
+        params=params,
+        timeout=REQUEST_TIMEOUT
     )
 
-    if isinstance(data, dict):
-        data = data.get("data", [])
-
-    return data
+    response.raise_for_status()
+    return response.json()
 
 
-def get_top_symbols():
-    tickers = get_tickers()
+# =========================
+# HELPERS
+# =========================
 
-    valid = []
+def unwrap_data(response):
+    """
+    Handles common API structures:
+    {
+        "data": [...]
+    }
 
-    for item in tickers:
-        try:
-            symbol = item["symbol"]
-            volume = float(item.get("volume", 0))
-            last = float(item.get("last", 0))
+    or
 
-            if last > 0:
-                valid.append({
-                    "symbol": symbol,
-                    "volume": volume,
-                    "last": last
-                })
-        except Exception:
+    {
+        "success": true,
+        "data": [...]
+    }
+    """
+
+    if isinstance(response, dict):
+        if "data" in response:
+            return response["data"]
+
+        if "result" in response:
+            return response["result"]
+
+    return response
+
+
+def number(value):
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+# =========================
+# GET ALL FUTURES TICKERS
+# =========================
+
+def get_tickers():
+
+    response = ourbit_get(
+        "/api/v1/contract/ticker"
+    )
+
+    data = unwrap_data(response)
+
+    if not isinstance(data, list):
+        print("Unexpected ticker response:")
+        print(response)
+        return []
+
+    tickers = []
+
+    for item in data:
+
+        if not isinstance(item, dict):
             continue
 
-    valid.sort(
+        symbol = (
+            item.get("symbol")
+            or item.get("contract")
+        )
+
+        if not symbol:
+            continue
+
+        last_price = (
+            item.get("lastPrice")
+            or item.get("last_price")
+            or item.get("last")
+            or item.get("price")
+        )
+
+        volume = (
+            item.get("volume")
+            or item.get("vol")
+            or item.get("quantity")
+            or item.get("amount")
+        )
+
+        last_price = number(last_price)
+        volume = number(volume)
+
+        if last_price is None:
+            continue
+
+        if volume is None:
+            volume = 0
+
+        tickers.append({
+            "symbol": symbol,
+            "price": last_price,
+            "volume": volume
+        })
+
+    return tickers
+
+
+# =========================
+# TOP 100 BY 24H VOLUME
+# =========================
+
+def get_top_contracts():
+
+    tickers = get_tickers()
+
+    tickers.sort(
         key=lambda x: x["volume"],
         reverse=True
     )
 
-    return valid[:TOP_SYMBOLS]
+    top = tickers[:TOP_CONTRACTS]
 
+    print(f"Found {len(tickers)} futures contracts.")
+    print(f"Checking top {len(top)} by volume.")
+
+    return top
+
+
+# =========================
+# GET KLINES
+# =========================
 
 def get_klines(symbol):
-    data = get_json(
-        f"{OURBIT_URL}/api/v1/contract/kline/{symbol}",
+
+    now_ms = int(time.time() * 1000)
+
+    # 130 hours of history
+    start_ms = now_ms - (CANDLE_COUNT * 60 * 60 * 1000)
+
+    response = ourbit_get(
+        f"/api/v1/contract/kline/{symbol}",
         params={
-            "interval": "Min60",
-            "limit": KLINE_LIMIT
+            "interval": TIMEFRAME,
+            "start": start_ms,
+            "end": now_ms
         }
     )
 
+    data = unwrap_data(response)
+
     if isinstance(data, dict):
-        data = data.get("data", [])
+
+        # Some APIs wrap candle arrays inside a key
+        for key in ["data", "list", "rows", "klines"]:
+            if key in data:
+                data = data[key]
+                break
+
+    if not isinstance(data, list):
+        return []
 
     candles = []
 
     for row in data:
+
         try:
-            # Ourbit Kline format:
-            # time, open, close, high, low, volume, amount
+
+            if isinstance(row, list):
+
+                # Standard futures kline structure:
+                # [time, open, close, high, low, volume, amount]
+
+                if len(row) < 6:
+                    continue
+
+                timestamp = number(row[0])
+                open_price = number(row[1])
+                close_price = number(row[2])
+                high_price = number(row[3])
+                low_price = number(row[4])
+                volume = number(row[5])
+
+            elif isinstance(row, dict):
+
+                timestamp = number(
+                    row.get("time")
+                    or row.get("timestamp")
+                    or row.get("ts")
+                )
+
+                open_price = number(
+                    row.get("open")
+                    or row.get("openPrice")
+                )
+
+                close_price = number(
+                    row.get("close")
+                    or row.get("closePrice")
+                )
+
+                high_price = number(
+                    row.get("high")
+                    or row.get("highPrice")
+                )
+
+                low_price = number(
+                    row.get("low")
+                    or row.get("lowPrice")
+                )
+
+                volume = number(
+                    row.get("volume")
+                    or row.get("vol")
+                )
+
+            else:
+                continue
+
+            if None in (
+                timestamp,
+                open_price,
+                close_price,
+                high_price,
+                low_price
+            ):
+                continue
+
             candles.append({
-                "time": float(row[0]),
-                "open": float(row[1]),
-                "close": float(row[2]),
-                "high": float(row[3]),
-                "low": float(row[4]),
-                "volume": float(row[5])
+                "time": timestamp,
+                "open": open_price,
+                "close": close_price,
+                "high": high_price,
+                "low": low_price,
+                "volume": volume or 0
             })
+
         except Exception:
             continue
 
-    return candles
+    candles.sort(key=lambda x: x["time"])
 
+    return candles[-CANDLE_COUNT:]
+
+
+# =========================
+# RSI
+# =========================
 
 def calculate_rsi(closes, period=14):
+
     if len(closes) < period + 1:
-        return None
+        return []
 
     gains = []
     losses = []
 
     for i in range(1, len(closes)):
+
         change = closes[i] - closes[i - 1]
 
-        gains.append(max(change, 0))
-        losses.append(max(-change, 0))
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+        else:
+            gains.append(0)
+            losses.append(abs(change))
 
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
 
+    rsi = [None] * period
+
+    if avg_loss == 0:
+        rsi.append(100)
+    else:
+        rs = avg_gain / avg_loss
+        rsi.append(100 - (100 / (1 + rs)))
+
     for i in range(period, len(gains)):
+
         avg_gain = (
             (avg_gain * (period - 1)) + gains[i]
         ) / period
@@ -140,247 +355,414 @@ def calculate_rsi(closes, period=14):
             (avg_loss * (period - 1)) + losses[i]
         ) / period
 
-    if avg_loss == 0:
-        return 100
+        if avg_loss == 0:
+            value = 100
+        else:
+            rs = avg_gain / avg_loss
+            value = 100 - (100 / (1 + rs))
 
-    rs = avg_gain / avg_loss
+        rsi.append(value)
 
-    return 100 - (100 / (1 + rs))
-
-
-def find_pivots(candles):
-    lows = []
-    highs = []
-
-    for i in range(2, len(candles) - 2):
-
-        low = candles[i]["low"]
-        high = candles[i]["high"]
-
-        if (
-            low < candles[i - 1]["low"]
-            and low < candles[i - 2]["low"]
-            and low < candles[i + 1]["low"]
-            and low < candles[i + 2]["low"]
-        ):
-            lows.append(low)
-
-        if (
-            high > candles[i - 1]["high"]
-            and high > candles[i - 2]["high"]
-            and high > candles[i + 1]["high"]
-            and high > candles[i + 2]["high"]
-        ):
-            highs.append(high)
-
-    return lows, highs
+    return rsi
 
 
-def nearest_level(price, levels):
-    if not levels:
-        return None
+# =========================
+# PIVOTS
+# =========================
 
-    return min(
-        levels,
-        key=lambda x: abs(x - price)
-    )
+def find_pivot_lows(candles):
 
-
-def near_level(price, level):
-    if level is None or level == 0:
-        return False
-
-    return abs(price - level) / level <= LEVEL_DISTANCE
-
-
-def detect_divergence(candles):
-    if len(candles) < 40:
-        return None
-
-    closes = [x["close"] for x in candles]
-
-    # RSI series
-    rsi_values = []
-
-    for i in range(RSI_PERIOD, len(closes)):
-        rsi = calculate_rsi(
-            closes[:i + 1],
-            RSI_PERIOD
-        )
-
-        if rsi is not None:
-            rsi_values.append((i, rsi))
-
-    if len(rsi_values) < 10:
-        return None
-
-    # فقط بخش پایانی بازار را بررسی می‌کنیم
-    recent_start = max(
-        RSI_PERIOD,
-        len(candles) - 45
-    )
-
-    lows = []
-    highs = []
+    pivots = []
 
     for i in range(
-        recent_start + 2,
-        len(candles) - 2
+        PIVOT_LEFT,
+        len(candles) - PIVOT_RIGHT
     ):
-        if (
-            candles[i]["low"] < candles[i - 1]["low"]
-            and candles[i]["low"] < candles[i - 2]["low"]
-            and candles[i]["low"] < candles[i + 1]["low"]
-            and candles[i]["low"] < candles[i + 2]["low"]
-        ):
-            lows.append(i)
 
-        if (
-            candles[i]["high"] > candles[i - 1]["high"]
-            and candles[i]["high"] > candles[i - 2]["high"]
-            and candles[i]["high"] > candles[i + 1]["high"]
-            and candles[i]["high"] > candles[i + 2]["high"]
-        ):
-            highs.append(i)
+        current = candles[i]["low"]
 
-    # واگرایی صعودی
+        left = [
+            candles[j]["low"]
+            for j in range(
+                i - PIVOT_LEFT,
+                i
+            )
+        ]
+
+        right = [
+            candles[j]["low"]
+            for j in range(
+                i + 1,
+                i + PIVOT_RIGHT + 1
+            )
+        ]
+
+        if current <= min(left) and current <= min(right):
+            pivots.append(i)
+
+    return pivots
+
+
+def find_pivot_highs(candles):
+
+    pivots = []
+
+    for i in range(
+        PIVOT_LEFT,
+        len(candles) - PIVOT_RIGHT
+    ):
+
+        current = candles[i]["high"]
+
+        left = [
+            candles[j]["high"]
+            for j in range(
+                i - PIVOT_LEFT,
+                i
+            )
+        ]
+
+        right = [
+            candles[j]["high"]
+            for j in range(
+                i + 1,
+                i + PIVOT_RIGHT + 1
+            )
+        ]
+
+        if current >= max(left) and current >= max(right):
+            pivots.append(i)
+
+    return pivots
+
+
+# =========================
+# SUPPORT / RESISTANCE
+# =========================
+
+def get_support_resistance(candles):
+
+    lows = find_pivot_lows(candles)
+    highs = find_pivot_highs(candles)
+
+    if not lows or not highs:
+        return None, None
+
+    current_price = candles[-1]["close"]
+
+    supports = [
+        candles[i]["low"]
+        for i in lows
+        if candles[i]["low"] <= current_price
+    ]
+
+    resistances = [
+        candles[i]["high"]
+        for i in highs
+        if candles[i]["high"] >= current_price
+    ]
+
+    support = max(supports) if supports else None
+    resistance = min(resistances) if resistances else None
+
+    return support, resistance
+
+
+# =========================
+# NEAR LEVEL
+# =========================
+
+def near_level(price, level):
+
+    if level is None:
+        return False
+
+    distance = abs(price - level) / level
+
+    return distance <= LEVEL_DISTANCE
+
+
+# =========================
+# RSI DIVERGENCE
+# =========================
+
+def detect_divergence(candles, rsi):
+
+    if len(candles) != len(rsi):
+        return None
+
+    lows = find_pivot_lows(candles)
+    highs = find_pivot_highs(candles)
+
+    # Bullish divergence:
+    # price makes lower low
+    # RSI makes higher low
+
     if len(lows) >= 2:
-        i1, i2 = lows[-2], lows[-1]
 
-        rsi1 = calculate_rsi(
-            closes[:i1 + 1],
-            RSI_PERIOD
-        )
-
-        rsi2 = calculate_rsi(
-            closes[:i2 + 1],
-            RSI_PERIOD
-        )
+        i1 = lows[-2]
+        i2 = lows[-1]
 
         if (
-            rsi1 is not None
-            and rsi2 is not None
-            and candles[i2]["low"] < candles[i1]["low"]
-            and rsi2 > rsi1
+            rsi[i1] is not None
+            and rsi[i2] is not None
         ):
-            return "bullish"
 
-    # واگرایی نزولی
+            price_lower = (
+                candles[i2]["low"]
+                < candles[i1]["low"]
+            )
+
+            rsi_higher = (
+                rsi[i2]
+                > rsi[i1]
+            )
+
+            if price_lower and rsi_higher:
+                return "BULLISH"
+
+
+    # Bearish divergence:
+    # price makes higher high
+    # RSI makes lower high
+
     if len(highs) >= 2:
-        i1, i2 = highs[-2], highs[-1]
 
-        rsi1 = calculate_rsi(
-            closes[:i1 + 1],
-            RSI_PERIOD
-        )
-
-        rsi2 = calculate_rsi(
-            closes[:i2 + 1],
-            RSI_PERIOD
-        )
+        i1 = highs[-2]
+        i2 = highs[-1]
 
         if (
-            rsi1 is not None
-            and rsi2 is not None
-            and candles[i2]["high"] > candles[i1]["high"]
-            and rsi2 < rsi1
+            rsi[i1] is not None
+            and rsi[i2] is not None
         ):
-            return "bearish"
+
+            price_higher = (
+                candles[i2]["high"]
+                > candles[i1]["high"]
+            )
+
+            rsi_lower = (
+                rsi[i2]
+                < rsi[i1]
+            )
+
+            if price_higher and rsi_lower:
+                return "BEARISH"
 
     return None
 
 
-def analyze_symbol(symbol):
+# =========================
+# ANALYZE ONE CONTRACT
+# =========================
+
+def analyze(symbol, ticker_price):
+
     candles = get_klines(symbol)
 
     if len(candles) < 50:
         return None
 
-    # آخرین کندل کامل
-    candles = candles[:-1]
+    closes = [
+        candle["close"]
+        for candle in candles
+    ]
 
-    price = candles[-1]["close"]
+    rsi = calculate_rsi(
+        closes,
+        RSI_PERIOD
+    )
 
-    lows, highs = find_pivots(candles)
+    if not rsi:
+        return None
 
-    support = nearest_level(price, lows)
-    resistance = nearest_level(price, highs)
+    support, resistance = get_support_resistance(
+        candles
+    )
+
+    price = ticker_price
+
+    divergence = detect_divergence(
+        candles,
+        rsi
+    )
 
     alerts = []
 
-    if support and near_level(price, support):
-        alerts.append(
-            f"🟢 نزدیک حمایت\n"
-            f"حمایت: {support:.8g}\n"
-            f"قیمت: {price:.8g}"
-        )
+    if near_level(price, support):
 
-    if resistance and near_level(price, resistance):
-        alerts.append(
-            f"🔴 نزدیک مقاومت\n"
-            f"مقاومت: {resistance:.8g}\n"
-            f"قیمت: {price:.8g}"
-        )
+        alerts.append({
+            "type": "SUPPORT",
+            "level": support
+        })
 
-    divergence = detect_divergence(candles)
+        if divergence == "BULLISH":
 
-    if divergence == "bullish" and support and near_level(price, support):
-        alerts.append(
-            "📈 واگرایی صعودی RSI نزدیک حمایت"
-        )
+            alerts.append({
+                "type": "BULLISH_DIVERGENCE",
+                "level": support
+            })
 
-    if divergence == "bearish" and resistance and near_level(price, resistance):
-        alerts.append(
-            "📉 واگرایی نزولی RSI نزدیک مقاومت"
-        )
+    if near_level(price, resistance):
+
+        alerts.append({
+            "type": "RESISTANCE",
+            "level": resistance
+        })
+
+        if divergence == "BEARISH":
+
+            alerts.append({
+                "type": "BEARISH_DIVERGENCE",
+                "level": resistance
+            })
 
     if not alerts:
         return None
 
-    rsi = calculate_rsi(
-        [x["close"] for x in candles],
-        RSI_PERIOD
-    )
-
-    return (
-        f"⚡ هشدار Futures - 1H\n\n"
-        f"📌 {symbol}\n"
-        f"💰 قیمت: {price:.8g}\n"
-        f"📊 RSI(14): {rsi:.2f}\n\n"
-        + "\n\n".join(alerts)
-    )
+    return {
+        "symbol": symbol,
+        "price": price,
+        "support": support,
+        "resistance": resistance,
+        "rsi": rsi[-1],
+        "alerts": alerts
+    }
 
 
-def main():
-    print("Starting Ourbit Futures scanner...")
+# =========================
+# FORMAT ALERT
+# =========================
 
-    symbols = get_top_symbols()
+def format_alert(result):
 
-    print(
-        f"Found {len(symbols)} top Futures contracts."
-    )
+    symbol = result["symbol"]
+    price = result["price"]
+    support = result["support"]
+    resistance = result["resistance"]
+    rsi = result["rsi"]
 
-    sent = 0
+    lines = [
+        "🚨 OURBIT FUTURES ALERT 🚨",
+        "",
+        f"📌 قرارداد: {symbol}",
+        f"💰 قیمت: {price:.8g}",
+    ]
 
-    for item in symbols:
-        symbol = item["symbol"]
+    if support is not None:
+        lines.append(
+            f"🟢 حمایت: {support:.8g}"
+        )
 
-        try:
-            alert = analyze_symbol(symbol)
+    if resistance is not None:
+        lines.append(
+            f"🔴 مقاومت: {resistance:.8g}"
+        )
 
-            if alert:
-                send_telegram(alert)
-                sent += 1
+    if rsi is not None:
+        lines.append(
+            f"📊 RSI(14): {rsi:.2f}"
+        )
 
-            print(f"Checked {symbol}")
+    lines.append("")
 
-        except Exception as e:
-            print(
-                f"Error checking {symbol}: {e}"
+    for alert in result["alerts"]:
+
+        if alert["type"] == "SUPPORT":
+
+            lines.append(
+                "🟢 قیمت به محدوده حمایت رسیده است."
             )
 
+        elif alert["type"] == "RESISTANCE":
+
+            lines.append(
+                "🔴 قیمت به محدوده مقاومت رسیده است."
+            )
+
+        elif alert["type"] == "BULLISH_DIVERGENCE":
+
+            lines.append(
+                "🟢 واگرایی مثبت RSI در حمایت شناسایی شد."
+            )
+
+        elif alert["type"] == "BEARISH_DIVERGENCE":
+
+            lines.append(
+                "🔴 واگرایی منفی RSI در مقاومت شناسایی شد."
+            )
+
+    lines.extend([
+        "",
+        "⏱ تایم‌فریم: 1H",
+        "🤖 فقط هشدار — بدون معامله"
+    ])
+
+    return "\n".join(lines)
+
+
+# =========================
+# MAIN
+# =========================
+
+def main():
+
+    print("=" * 50)
+    print("OURBIT FUTURES ALERT BOT")
+    print("=" * 50)
+
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        raise RuntimeError(
+            "Telegram secrets are missing."
+        )
+
+    top_contracts = get_top_contracts()
+
+    if not top_contracts:
+        raise RuntimeError(
+            "No futures contracts received from Ourbit."
+        )
+
+    alert_count = 0
+
+    for index, ticker in enumerate(top_contracts, start=1):
+
+        symbol = ticker["symbol"]
+        price = ticker["price"]
+
+        print(
+            f"[{index}/{len(top_contracts)}] "
+            f"{symbol} -> {price}"
+        )
+
+        try:
+
+            result = analyze(
+                symbol,
+                price
+            )
+
+            if result:
+
+                message = format_alert(result)
+
+                print(message)
+
+                send_telegram(message)
+
+                alert_count += 1
+
+        except Exception as e:
+
+            print(
+                f"ERROR {symbol}: {e}"
+            )
+
+        # Small pause to avoid hammering the API
+        time.sleep(0.15)
+
     print(
-        f"Finished. Alerts sent: {sent}"
+        f"Finished. Alerts sent: {alert_count}"
     )
 
 
