@@ -26,7 +26,7 @@ def main():
         print("STEP 2")
 
         response = requests.get(
-            "https://api.ourbit.com/api/v1/contract/ticker",
+            "https://futures.ourbit.com/api/v1/contract/ticker",
             timeout=20
         )
 
