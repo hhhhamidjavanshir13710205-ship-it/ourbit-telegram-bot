@@ -1,0 +1,55 @@
+name: BTC 1H Signal Telegram V3
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 * * * *"
+
+jobs:
+  btc-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTC 1H candle data
+        id: btc
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import urllib.request
+
+          url = "https://futures.ourbit.com/api/v1/contract/kline/BTCUSDT?interval=60m&limit=10"
+
+          try:
+              with urllib.request.urlopen(url, timeout=20) as response:
+                  data = json.loads(response.read().decode())
+
+              print("Ourbit response:")
+              print(data)
+
+              # پیدا کردن لیست کندل‌ها
+              candles = data.get("data", data)
+
+              if not isinstance(candles, list):
+                  raise Exception("Candle data is not a list")
+
+              if len(candles) < 3:
+                  raise Exception(f"Not enough candles: {len(candles)}")
+
+              # فقط آخرین 3 کندل را می‌گیریم
+              c1, c2, c3 = candles[-3], candles[-2], candles[-1]
+
+              print("Last 3 candles:")
+              print(c1)
+              print(c2)
+              print(c3)
+
+              print("BTC candle test OK")
+
+          except Exception as e:
+              print("ERROR:", e)
+              raise
+          PY
