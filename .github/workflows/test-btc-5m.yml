@@ -1,4 +1,4 @@
-name: Test BTC 5M Futures
+name: Test BTC 5M
 
 on:
   workflow_dispatch:
@@ -8,26 +8,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test Ourbit BTCUSDT 5M
+      - name: Test Ourbit BTC 5M
         run: |
           python - <<'PY'
           import requests
           import json
-          from datetime import datetime, timezone
 
-          print("======================================")
-          print("🧪 OURBIT BTC/USDT FUTURES - 5M TEST")
-          print("======================================")
-
-          url = "https://contract.ourbit.com/api/v1/contract/kline/BTC_USDT"
+          url = "https://api.ourbit.com/api/v3/klines"
 
           params = {
-              "interval": "Min5"
+              "symbol": "BTCUSDT",
+              "interval": "5m",
+              "limit": 5
           }
 
-          print("📡 Connecting to Ourbit Futures...")
-          print(f"Symbol   : BTC_USDT")
-          print(f"Interval : Min5")
+          print("======================================")
+          print("🧪 OURBIT BTC/USDT - 5M TEST")
+          print("======================================")
+          print("URL:", url)
+          print("Symbol:", params["symbol"])
+          print("Interval:", params["interval"])
           print("")
 
           response = requests.get(
@@ -36,11 +36,10 @@ jobs:
               timeout=20
           )
 
-          print(f"HTTP Status: {response.status_code}")
+          print("HTTP Status:", response.status_code)
           print("")
-
-          print("📦 RAW RESPONSE:")
-          print(response.text[:5000])
+          print("RAW RESPONSE:")
+          print(response.text)
 
           response.raise_for_status()
 
@@ -51,12 +50,16 @@ jobs:
           print("✅ API RESPONSE RECEIVED")
           print("======================================")
 
-          print(json.dumps(data, indent=2, ensure_ascii=False))
+          for candle in data:
+              print(
+                  "Time:", candle[0],
+                  "| Open:", candle[1],
+                  "| High:", candle[2],
+                  "| Low:", candle[3],
+                  "| Close:", candle[4],
+                  "| Volume:", candle[5]
+              )
 
           print("")
-          print("🕐 Test time:")
-          print(datetime.now(timezone.utc).isoformat())
-
-          print("")
-          print("🎉 BTC 5M FUTURES TEST FINISHED")
+          print("🎉 BTC 5M TEST FINISHED")
           PY
