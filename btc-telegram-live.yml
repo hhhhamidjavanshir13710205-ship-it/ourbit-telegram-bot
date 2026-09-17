@@ -1,0 +1,89 @@
+name: BTC 1H Telegram Live Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  btc-telegram:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTC 1H candle
+        shell: bash
+        run: |
+          set -e
+
+          echo "Getting BTCUSDT 1H candle..."
+
+          RESPONSE=$(curl -sS "https://api.ourbit.com/api/v3/klines?symbol=BTCUSDT&interval=60m&limit=1")
+
+          echo "Ourbit response:"
+          echo "$RESPONSE"
+
+          if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "[]" ]; then
+            echo "ERROR: Empty response from Ourbit"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.parse
+
+          token = os.environ["TELEGRAM_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          url = "https://api.ourbit.com/api/v3/klines?symbol=BTCUSDT&interval=60m&limit=1"
+
+          with urllib.request.urlopen(url, timeout=20) as response:
+              data = json.loads(response.read().decode())
+
+          if not data:
+              raise Exception("No candle data received")
+
+          candle = data[-1]
+
+          open_price = candle[1]
+          high_price = candle[2]
+          low_price = candle[3]
+          close_price = candle[4]
+          volume = candle[5]
+
+          message = (
+              "🟠 BTC/USDT - 1H\n\n"
+              f"💰 Open: {open_price}\n"
+              f"📈 High: {high_price}\n"
+              f"📉 Low: {low_price}\n"
+              f"🔵 Close: {close_price}\n"
+              f"📊 Volume: {volume}\n\n"
+              "✅ Data received from Ourbit"
+          )
+
+          telegram_url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+          payload = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": message
+          }).encode()
+
+          request = urllib.request.Request(
+              telegram_url,
+              data=payload,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+              result = json.loads(response.read().decode())
+
+          print("Telegram response:")
+          print(result)
+
+          if not result.get("ok"):
+              raise Exception("Telegram message failed")
+
+          print("✅ Telegram message sent successfully")
+          PY
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
