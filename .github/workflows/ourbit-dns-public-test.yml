@@ -1,0 +1,38 @@
+name: Ourbit Public DNS Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-public-dns:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test public DNS
+        run: |
+          set +e
+
+          echo "================================"
+          echo "Ourbit Public DNS Test"
+          echo "================================"
+
+          echo ""
+          echo "=== SYSTEM NSLOOKUP ==="
+          nslookup contract.ourbit.com
+
+          echo ""
+          echo "=== GOOGLE DNS ==="
+          nslookup contract.ourbit.com 8.8.8.8
+
+          echo ""
+          echo "=== CLOUDFLARE DNS ==="
+          nslookup contract.ourbit.com 1.1.1.1
+
+          echo ""
+          echo "=== HTTPS CURL ==="
+          curl -Iv --connect-timeout 10 https://contract.ourbit.com
+
+          echo ""
+          echo "================================"
+          echo "Public DNS test finished"
+          echo "================================"
