@@ -1,0 +1,65 @@
+name: Test BTC 1H Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-btc-1h-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTCUSDT 1H Candles
+        run: |
+          python - <<'PY'
+          import requests
+          from datetime import datetime, timezone
+
+          url = "https://api.ourbit.com/api/v3/klines"
+
+          params = {
+              "symbol": "BTCUSDT",
+              "interval": "1h",
+              "limit": 5
+          }
+
+          print("======================================")
+          print("🧪 OURBIT BTCUSDT 1H DATA")
+          print("======================================")
+
+          response = requests.get(
+              url,
+              params=params,
+              timeout=20
+          )
+
+          print("HTTP Status:", response.status_code)
+
+          response.raise_for_status()
+
+          data = response.json()
+
+          print("")
+          print("📊 LAST 5 BTC 1H CANDLES")
+          print("--------------------------------------")
+
+          for i, candle in enumerate(data, 1):
+
+              timestamp = int(candle[0])
+
+              dt = datetime.fromtimestamp(
+                  timestamp / 1000,
+                  tz=timezone.utc
+              )
+
+              print(f"Candle #{i}")
+              print(f"Time   : {dt}")
+              print(f"Open   : {candle[1]}")
+              print(f"High   : {candle[2]}")
+              print(f"Low    : {candle[3]}")
+              print(f"Close  : {candle[4]}")
+              print(f"Volume : {candle[5]}")
+              print("--------------------------------------")
+
+          print("")
+          print("✅ BTCUSDT 1H DATA TEST SUCCESSFUL")
+          PY
