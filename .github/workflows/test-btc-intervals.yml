@@ -1,0 +1,59 @@
+name: Test BTC Intervals
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-intervals:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test intervals
+        run: |
+          python - <<'PY'
+          import requests
+
+          url = "https://api.ourbit.com/api/v3/klines"
+
+          intervals = [
+              "60m",
+              "60min",
+              "1H",
+              "1h",
+              "hour",
+              "Hour1",
+              "H1"
+          ]
+
+          for interval in intervals:
+
+              params = {
+                  "symbol": "BTCUSDT",
+                  "interval": interval,
+                  "limit": 1
+              }
+
+              try:
+                  r = requests.get(
+                      url,
+                      params=params,
+                      timeout=10
+                  )
+
+                  print("----------------------------")
+                  print("Testing:", interval)
+                  print("Status:", r.status_code)
+
+                  if r.status_code == 200:
+                      print("✅ SUCCESS:", interval)
+                      print(r.text[:300])
+                      break
+                  else:
+                      print(r.text[:150])
+
+              except Exception as e:
+                  print(interval, e)
+
+          print("----------------------------")
+          print("Finished")
+          PY
