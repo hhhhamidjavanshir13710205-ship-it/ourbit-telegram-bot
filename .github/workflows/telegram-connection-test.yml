@@ -1,0 +1,51 @@
+name: Telegram Connection Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  telegram-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Telegram Bot
+        shell: bash
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          echo "Checking Telegram secrets..."
+
+          if [ -z "$TELEGRAM_TOKEN" ]; then
+            echo "ERROR: TELEGRAM_TOKEN is empty or not available."
+            exit 1
+          fi
+
+          if [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "ERROR: TELEGRAM_CHAT_ID is empty or not available."
+            exit 1
+          fi
+
+          echo "Secrets are available."
+
+          echo "Testing Telegram Bot API..."
+
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=✅ Telegram connection test successful!")
+
+          echo "Telegram response:"
+          echo "$RESPONSE"
+
+          STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+
+          if [ "$STATUS" != "200" ]; then
+            echo "ERROR: Telegram returned HTTP $STATUS"
+            exit 1
+          fi
+
+          echo "✅ Telegram connection successful!"
