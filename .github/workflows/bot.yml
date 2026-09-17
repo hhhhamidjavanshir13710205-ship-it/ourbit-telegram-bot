@@ -1,16 +1,16 @@
-name: Ourbit Telegram Bot
+name: Ourbit Crypto Bot
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Python
@@ -18,13 +18,47 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install packages
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install requests
+          fi
 
-      - name: Run bot
+      - name: Test Ourbit DNS
+        run: |
+          echo "================================"
+          echo "OURBIT DNS TEST"
+          echo "================================"
+          getent hosts contract.ourbit.com || true
+
+      - name: Test Ourbit Connection
+        run: |
+          echo "================================"
+          echo "OURBIT CONNECTION TEST"
+          echo "================================"
+          curl -v \
+            --connect-timeout 15 \
+            --max-time 30 \
+            "https://contract.ourbit.com" \
+            || true
+
+      - name: Test Ourbit Kline API
+        run: |
+          echo "================================"
+          echo "OURBIT KLINE API TEST"
+          echo "================================"
+          curl -v \
+            --connect-timeout 15 \
+            --max-time 30 \
+            "https://contract.ourbit.com/api/v1/contract/kline/ETH_USDT?interval=Min15" \
+            || true
+
+      - name: Run python bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          OURBIT_API_KEY: ${{ secrets.OURBIT_API_KEY }}
-          OURBIT_API_SECRET: ${{ secrets.OURBIT_API_SECRET }}
-        run: python bot.py
+        run: |
+          python bot.py
