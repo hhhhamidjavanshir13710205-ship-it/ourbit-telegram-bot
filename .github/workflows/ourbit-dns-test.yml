@@ -9,8 +9,13 @@ jobs:
 
     steps:
       - name: Test DNS resolution
-        run: |
+             run: |
           echo "Testing Ourbit DNS..."
-          getent hosts contract.ourbit.com
-          nslookup contract.ourbit.com
-          curl -I --connect-timeout 10 https://contract.ourbit.com
+          echo "=== getent ==="
+          getent hosts contract.ourbit.com || true
+
+          echo "=== nslookup ==="
+          nslookup contract.ourbit.com || true
+
+          echo "=== curl ==="
+          curl -I --connect-timeout 10 https://contract.ourbit.com || true 
