@@ -2,6 +2,8 @@ name: BTC 1H Signal Telegram V2
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
 
 jobs:
   btc-signal:
