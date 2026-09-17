@@ -1,518 +1,524 @@
 import os
+import time
 import requests
 
-# =========================
-# SETTINGS
-# =========================
+# =========================================================
+# Telegram
+# =========================================================
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-SYMBOL = "ETHUSDT"
-INTERVAL = "15m"
+# =========================================================
+# Settings
+# =========================================================
 
-CANDLE_LIMIT = 100
+SYMBOL = "ETH_USDT"
+INTERVAL = "Min15"
+
+CANDLE_LIMIT = 150
 
 # فاصله مجاز قیمت از حمایت/مقاومت
 NEAR_PERCENT = 0.30
 
+# قدرت Pivot
+PIVOT_STRENGTH = 3
+
+# =========================================================
+# Ourbit API
+# =========================================================
+
 API_URL = (
-    f"https://futures.ourbit.com/api/v1/contract/kline/"
-    f"{SYMBOL}?interval={INTERVAL}&limit={CANDLE_LIMIT}"
-)
-
-TELEGRAM_URL = (
-    f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    f"https://contract.ourbit.com"
+    f"/api/v1/contract/kline/{SYMBOL}"
 )
 
 
-# =========================
-# TELEGRAM
-# =========================
+# =========================================================
+# Telegram message
+# =========================================================
 
 def send_telegram(message):
 
-    response = requests.post(
-        TELEGRAM_URL,
-        json={
-            "chat_id": CHAT_ID,
-            "text": message
-        },
-        timeout=20
-    )
+    if not TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN is missing")
+        return False
 
-    print("Telegram:", response.status_code)
-    print(response.text)
+    if not CHAT_ID:
+        print("ERROR: TELEGRAM_CHAT_ID is missing")
+        return False
 
-    return response
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
+
+    try:
+
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=20
+        )
+
+        print("Telegram:", response.status_code)
+        print(response.text)
+
+        return response.ok
+
+    except Exception as e:
+
+        print("Telegram error:", e)
+
+        return False
 
 
-# =========================
-# GET CANDLES
-# =========================
+# =========================================================
+# Get candles from Ourbit
+# =========================================================
 
 def get_candles():
 
-    response = requests.get(
-        API_URL,
-        headers={
-            "User-Agent": "Mozilla/5.0"
-        },
-        timeout=30
+    now_ms = int(time.time() * 1000)
+
+    # 15 دقیقه برای هر کندل
+    candle_duration_ms = 15 * 60 * 1000
+
+    start_ms = now_ms - (
+        CANDLE_LIMIT * candle_duration_ms
     )
 
-    print("Ourbit:", response.status_code)
+    params = {
+        "interval": INTERVAL,
+        "start": start_ms,
+        "end": now_ms
+    }
 
-    response.raise_for_status()
+    print()
+    print("========== OURBIT REQUEST ==========")
+    print("URL:", API_URL)
+    print("Symbol:", SYMBOL)
+    print("Interval:", INTERVAL)
+    print("Start:", start_ms)
+    print("End:", now_ms)
+    print("====================================")
 
-    data = response.json()
+    try:
 
-    print("Ourbit response type:", type(data))
+        response = requests.get(
+            API_URL,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0"
+            },
+            timeout=30
+        )
 
-    return data
+        print("Ourbit HTTP:", response.status_code)
 
+        response.raise_for_status()
 
-# =========================
-# PARSE CANDLES
-# =========================
+        data = response.json()
 
-def parse_candles(data):
-
-    raw = None
-
-    # -------------------------
-    # Dictionary response
-    # -------------------------
-
-    if isinstance(data, dict):
-
-        raw = data.get("data")
-
-        if raw is None:
-            raw = data.get("result")
-
-        if raw is None:
-            raw = data.get("rows")
-
-        # بعضی API ها داده را داخل result/data تو در تو می‌گذارند
-        if isinstance(raw, dict):
-
-            raw = (
-                raw.get("data")
-                or raw.get("rows")
-                or raw.get("list")
-                or raw.get("result")
-            )
-
-    # -------------------------
-    # Direct list response
-    # -------------------------
-
-    elif isinstance(data, list):
-
-        raw = data
-
-    # -------------------------
-    # Empty response
-    # -------------------------
-
-    if not raw:
-
-        print("========== DEBUG RESPONSE ==========")
+        print()
+        print("========== OURBIT RESPONSE ==========")
         print(data)
-        print("====================================")
+        print("======================================")
+
+        return data
+
+    except Exception as e:
+
+        print("Ourbit request error:", e)
+
+        return None
+
+
+# =========================================================
+# Parse candles
+# =========================================================
+
+def parse_candles(response):
+
+    if response is None:
+
+        raise ValueError(
+            "Ourbit response is None"
+        )
+
+    if not isinstance(response, dict):
+
+        raise ValueError(
+            "Unexpected Ourbit response type"
+        )
+
+    if response.get("success") is False:
+
+        raise ValueError(
+            f"Ourbit error: "
+            f"{response.get('code')} - "
+            f"{response.get('message')}"
+        )
+
+    data = response.get("data")
+
+    if not data:
 
         raise ValueError(
             "Candle data is empty"
         )
 
-    candles = []
+    # -----------------------------------------------------
+    # Official Ourbit/MEXC-style contract Kline structure:
+    #
+    # data = {
+    #   "time": [...],
+    #   "open": [...],
+    #   "close": [...],
+    #   "high": [...],
+    #   "low": [...],
+    #   "vol": [...],
+    #   "amount": [...]
+    # }
+    # -----------------------------------------------------
 
-    # =========================
-    # PARSE EACH CANDLE
-    # =========================
+    if isinstance(data, dict):
 
-    for c in raw:
+        times = data.get("time", [])
+        opens = data.get("open", [])
+        closes = data.get("close", [])
+        highs = data.get("high", [])
+        lows = data.get("low", [])
 
-        try:
-
-            # ---------------------
-            # Array format
-            # ---------------------
-
-            if isinstance(c, list):
-
-                if len(c) < 5:
-                    continue
-
-                timestamp = float(c[0])
-                open_price = float(c[1])
-                high = float(c[2])
-                low = float(c[3])
-                close = float(c[4])
-
-            # ---------------------
-            # Dictionary format
-            # ---------------------
-
-            elif isinstance(c, dict):
-
-                timestamp = float(
-                    c.get(
-                        "timestamp",
-                        c.get(
-                            "time",
-                            c.get(
-                                "ts",
-                                c.get("t", 0)
-                            )
-                        )
-                    )
-                )
-
-                open_price = float(
-                    c.get(
-                        "open",
-                        c.get("o")
-                    )
-                )
-
-                high = float(
-                    c.get(
-                        "high",
-                        c.get("h")
-                    )
-                )
-
-                low = float(
-                    c.get(
-                        "low",
-                        c.get("l")
-                    )
-                )
-
-                close = float(
-                    c.get(
-                        "close",
-                        c.get("c")
-                    )
-                )
-
-            else:
-
-                continue
-
-            candles.append({
-                "time": timestamp,
-                "open": open_price,
-                "high": high,
-                "low": low,
-                "close": close
-            })
-
-        except Exception as e:
-
-            print(
-                "Candle parse error:",
-                e
+        if not times:
+            raise ValueError(
+                "Ourbit returned no candle times"
             )
 
-            continue
+        length = min(
+            len(times),
+            len(opens),
+            len(closes),
+            len(highs),
+            len(lows)
+        )
 
-    # =========================
-    # CHECK RESULT
-    # =========================
+        candles = []
 
-    print(
-        "Parsed candles:",
-        len(candles)
-    )
+        for i in range(length):
 
-    if len(candles) < 20:
+            candles.append({
+                "time": float(times[i]),
+                "open": float(opens[i]),
+                "high": float(highs[i]),
+                "low": float(lows[i]),
+                "close": float(closes[i])
+            })
+
+        candles.sort(
+            key=lambda x: x["time"]
+        )
+
+        print()
+        print("Parsed candles:", len(candles))
+
+        if candles:
+
+            print(
+                "First candle:",
+                candles[0]
+            )
+
+            print(
+                "Last candle:",
+                candles[-1]
+            )
+
+        return candles
+
+    # -----------------------------------------------------
+    # Backup parser in case API returns list
+    # -----------------------------------------------------
+
+    if isinstance(data, list):
+
+        candles = []
+
+        for item in data:
+
+            if isinstance(item, dict):
+
+                try:
+
+                    candle = {
+                        "time": float(
+                            item.get("time", item.get("t"))
+                        ),
+                        "open": float(
+                            item.get("open", item.get("o"))
+                        ),
+                        "high": float(
+                            item.get("high", item.get("h"))
+                        ),
+                        "low": float(
+                            item.get("low", item.get("l"))
+                        ),
+                        "close": float(
+                            item.get("close", item.get("c"))
+                        )
+                    }
+
+                    candles.append(candle)
+
+                except Exception:
+                    continue
+
+            elif isinstance(item, list):
+
+                # Backup for row-style candle data
+                if len(item) >= 6:
+
+                    try:
+
+                        candles.append({
+                            "time": float(item[0]),
+                            "open": float(item[1]),
+                            "high": float(item[2]),
+                            "low": float(item[3]),
+                            "close": float(item[4])
+                        })
+
+                    except Exception:
+                        continue
+
+        candles.sort(
+            key=lambda x: x["time"]
+        )
 
         print(
-            "Raw candle data:"
+            "Parsed list candles:",
+            len(candles)
         )
 
-        print(raw)
+        return candles
 
-        raise ValueError(
-            f"Not enough candles: {len(candles)}"
-        )
-
-    candles.sort(
-        key=lambda x: x["time"]
+    raise ValueError(
+        "Unknown Ourbit candle structure"
     )
 
-    return candles
 
+# =========================================================
+# Pivot detection
+# =========================================================
 
-# =========================
-# FIND PIVOTS
-# =========================
-
-def find_pivots(
-    candles,
-    strength=3
-):
+def find_pivots(candles, strength=3):
 
     supports = []
     resistances = []
 
+    total = len(candles)
+
+    if total < (strength * 2 + 1):
+
+        return supports, resistances
+
     for i in range(
         strength,
-        len(candles) - strength
+        total - strength
     ):
 
         current = candles[i]
 
-        left = candles[
-            i - strength:i
-        ]
+        current_low = current["low"]
+        current_high = current["high"]
 
-        right = candles[
-            i + 1:i + strength + 1
-        ]
+        is_support = True
+        is_resistance = True
 
-        # -------------------------
-        # Pivot Low = Support
-        # -------------------------
+        # -----------------------------------------------
+        # Check candles around pivot
+        # -----------------------------------------------
 
-        if all(
-            current["low"] <= x["low"]
-            for x in left + right
+        for j in range(
+            i - strength,
+            i + strength + 1
         ):
 
-            supports.append(
-                current["low"]
-            )
+            if j == i:
+                continue
 
-        # -------------------------
-        # Pivot High = Resistance
-        # -------------------------
+            if candles[j]["low"] <= current_low:
+                is_support = False
 
-        if all(
-            current["high"] >= x["high"]
-            for x in left + right
-        ):
+            if candles[j]["high"] >= current_high:
+                is_resistance = False
 
-            resistances.append(
-                current["high"]
-            )
+        if is_support:
+
+            supports.append({
+                "price": current_low,
+                "time": current["time"]
+            })
+
+        if is_resistance:
+
+            resistances.append({
+                "price": current_high,
+                "time": current["time"]
+            })
 
     return supports, resistances
 
 
-# =========================
-# MERGE LEVELS
-# =========================
+# =========================================================
+# Merge nearby levels
+# =========================================================
 
-def merge_levels(
-    levels,
-    tolerance=0.003
-):
+def merge_levels(levels):
 
     if not levels:
+
         return []
 
-    levels = sorted(levels)
+    levels = sorted(
+        levels,
+        key=lambda x: x["price"]
+    )
 
     merged = []
 
-    current = [levels[0]]
+    for level in levels:
 
-    for level in levels[1:]:
+        if not merged:
 
-        average = (
-            sum(current)
-            / len(current)
-        )
+            merged.append(level)
 
-        if (
-            abs(level - average)
-            / average
-            <= tolerance
-        ):
+            continue
 
-            current.append(level)
+        last = merged[-1]
+
+        distance_percent = (
+            abs(
+                level["price"] -
+                last["price"]
+            )
+            / last["price"]
+        ) * 100
+
+        if distance_percent <= NEAR_PERCENT:
+
+            # میانگین دو سطح
+            last["price"] = (
+                last["price"] +
+                level["price"]
+            ) / 2
 
         else:
 
-            merged.append(
-                sum(current)
-                / len(current)
-            )
-
-            current = [level]
-
-    merged.append(
-        sum(current)
-        / len(current)
-    )
+            merged.append(level)
 
     return merged
 
 
-# =========================
-# NEAREST LEVEL
-# =========================
+# =========================================================
+# Find nearest level
+# =========================================================
 
-def nearest_level(
+def find_nearest_support(
     price,
-    levels
+    supports
 ):
 
-    if not levels:
+    below = [
+        x for x in supports
+        if x["price"] <= price
+    ]
+
+    if not below:
         return None
 
-    return min(
-        levels,
-        key=lambda x:
-        abs(x - price)
+    return max(
+        below,
+        key=lambda x: x["price"]
     )
 
 
-# =========================
-# CHECK SIGNAL
-# =========================
-
-def check_signal(
+def find_nearest_resistance(
     price,
-    supports,
     resistances
 ):
 
-    support = nearest_level(
-        price,
-        supports
+    above = [
+        x for x in resistances
+        if x["price"] >= price
+    ]
+
+    if not above:
+        return None
+
+    return min(
+        above,
+        key=lambda x: x["price"]
     )
 
-    resistance = nearest_level(
-        price,
-        resistances
-    )
 
-    support_signal = False
-    resistance_signal = False
+# =========================================================
+# Check distance
+# =========================================================
 
-    # -------------------------
-    # Support
-    # -------------------------
-
-    if support is not None:
-
-        distance = (
-            abs(price - support)
-            / price
-            * 100
-        )
-
-        print(
-            f"Support distance: "
-            f"{distance:.4f}%"
-        )
-
-        if (
-            support < price
-            and distance <= NEAR_PERCENT
-        ):
-
-            support_signal = True
-
-    # -------------------------
-    # Resistance
-    # -------------------------
-
-    if resistance is not None:
-
-        distance = (
-            abs(price - resistance)
-            / price
-            * 100
-        )
-
-        print(
-            f"Resistance distance: "
-            f"{distance:.4f}%"
-        )
-
-        if (
-            resistance > price
-            and distance <= NEAR_PERCENT
-        ):
-
-            resistance_signal = True
+def distance_percent(price, level):
 
     return (
-        support_signal,
-        resistance_signal,
-        support,
-        resistance
-    )
+        abs(price - level)
+        / level
+    ) * 100
 
 
-# =========================
-# MAIN
-# =========================
+# =========================================================
+# Analyze market
+# =========================================================
 
-def main():
+def analyze(candles):
 
+    if len(candles) < 20:
+
+        print(
+            "Not enough candles"
+        )
+
+        return None
+
+    # -----------------------------------------------------
+    # آخرین کندل ممکن است هنوز در حال تشکیل باشد.
+    # از آخرین کندل بسته‌شده استفاده می‌کنیم.
+    # -----------------------------------------------------
+
+    closed_candle = candles[-2]
+
+    price = closed_candle["close"]
+
+    print()
+    print("========== MARKET ==========")
     print(
-        "================================"
+        "Closed candle price:",
+        price
     )
+    print("=============================")
 
-    print(
-        "Starting SR Dynamic V2 Bot"
-    )
-
-    print(
-        f"Symbol: {SYMBOL}"
-    )
-
-    print(
-        f"Timeframe: {INTERVAL}"
-    )
-
-    print(
-        "================================"
-    )
-
-    # =========================
-    # GET DATA
-    # =========================
-
-    data = get_candles()
-
-    # =========================
-    # PARSE
-    # =========================
-
-    candles = parse_candles(data)
-
-    # =========================
-    # LAST CLOSED CANDLE
-    # =========================
-
-    closed = candles[-2]
-
-    price = closed["close"]
-
-    print(
-        f"Price: {price:.4f}"
-    )
-
-    # =========================
-    # FIND LEVELS
-    # =========================
+    # -----------------------------------------------------
+    # Find pivots
+    # -----------------------------------------------------
 
     supports, resistances = find_pivots(
         candles,
-        strength=3
+        PIVOT_STRENGTH
     )
 
-    # =========================
-    # MERGE LEVELS
-    # =========================
+    # -----------------------------------------------------
+    # Merge nearby levels
+    # -----------------------------------------------------
 
     supports = merge_levels(
         supports
@@ -522,94 +528,225 @@ def main():
         resistances
     )
 
-    print(
-        "Supports:",
+    print()
+    print("========== LEVELS ==========")
+
+    print("Supports:")
+
+    for level in supports:
+
+        print(
+            round(level["price"], 4)
+        )
+
+    print("Resistances:")
+
+    for level in resistances:
+
+        print(
+            round(level["price"], 4)
+        )
+
+    print("============================")
+
+    # -----------------------------------------------------
+    # Nearest support
+    # -----------------------------------------------------
+
+    support = find_nearest_support(
+        price,
         supports
     )
 
-    print(
-        "Resistances:",
-        resistances
-    )
+    # -----------------------------------------------------
+    # Nearest resistance
+    # -----------------------------------------------------
 
-    # =========================
-    # SIGNAL
-    # =========================
-
-    (
-        near_support,
-        near_resistance,
-        support,
-        resistance
-    ) = check_signal(
+    resistance = find_nearest_resistance(
         price,
-        supports,
         resistances
     )
 
-    # =========================
-    # SUPPORT ALERT
-    # =========================
+    # -----------------------------------------------------
+    # Support signal
+    # -----------------------------------------------------
 
-    if near_support:
+    if support:
 
-        distance = (
-            abs(price - support)
-            / price
-            * 100
+        support_distance = distance_percent(
+            price,
+            support["price"]
         )
 
-        message = (
-            "🟢🔔 ETHUSDT 15M\n\n"
-            "📍 نزدیک حمایت\n\n"
-            f"💰 قیمت: {price:.4f}\n"
-            f"🟢 حمایت: {support:.4f}\n"
-            f"📏 فاصله: {distance:.2f}%\n\n"
-            "⚠️ قیمت به محدوده حمایت "
-            "نزدیک شده است."
+        print()
+        print(
+            "Nearest support:",
+            support["price"]
         )
-
-        send_telegram(message)
-
-    # =========================
-    # RESISTANCE ALERT
-    # =========================
-
-    elif near_resistance:
-
-        distance = (
-            abs(price - resistance)
-            / price
-            * 100
-        )
-
-        message = (
-            "🔴🔔 ETHUSDT 15M\n\n"
-            "📍 نزدیک مقاومت\n\n"
-            f"💰 قیمت: {price:.4f}\n"
-            f"🔴 مقاومت: {resistance:.4f}\n"
-            f"📏 فاصله: {distance:.2f}%\n\n"
-            "⚠️ قیمت به محدوده مقاومت "
-            "نزدیک شده است."
-        )
-
-        send_telegram(message)
-
-    # =========================
-    # NO SIGNAL
-    # =========================
-
-    else:
 
         print(
-            "No signal: price is not near "
-            "support or resistance."
+            "Support distance:",
+            round(
+                support_distance,
+                4
+            ),
+            "%"
         )
 
+        if support_distance <= NEAR_PERCENT:
 
-# =========================
-# START
-# =========================
+            return {
+                "type": "SUPPORT",
+                "price": price,
+                "level": support["price"],
+                "distance": support_distance
+            }
+
+    # -----------------------------------------------------
+    # Resistance signal
+    # -----------------------------------------------------
+
+    if resistance:
+
+        resistance_distance = distance_percent(
+            price,
+            resistance["price"]
+        )
+
+        print()
+        print(
+            "Nearest resistance:",
+            resistance["price"]
+        )
+
+        print(
+            "Resistance distance:",
+            round(
+                resistance_distance,
+                4
+            ),
+            "%"
+        )
+
+        if resistance_distance <= NEAR_PERCENT:
+
+            return {
+                "type": "RESISTANCE",
+                "price": price,
+                "level": resistance["price"],
+                "distance": resistance_distance
+            }
+
+    return None
+
+
+# =========================================================
+# Create Telegram signal
+# =========================================================
+
+def create_message(signal):
+
+    if signal["type"] == "SUPPORT":
+
+        return (
+            "🟢 ETHUSDT — SUPPORT\n\n"
+            f"💰 Price: {signal['price']:.2f}\n"
+            f"🟢 Support: {signal['level']:.2f}\n"
+            f"📏 Distance: {signal['distance']:.2f}%\n\n"
+            "⏱ Timeframe: 15M\n"
+            "📊 Dynamic Support/Resistance"
+        )
+
+    if signal["type"] == "RESISTANCE":
+
+        return (
+            "🔴 ETHUSDT — RESISTANCE\n\n"
+            f"💰 Price: {signal['price']:.2f}\n"
+            f"🔴 Resistance: {signal['level']:.2f}\n"
+            f"📏 Distance: {signal['distance']:.2f}%\n\n"
+            "⏱ Timeframe: 15M\n"
+            "📊 Dynamic Support/Resistance"
+        )
+
+    return "No signal"
+
+
+# =========================================================
+# Main
+# =========================================================
+
+def main():
+
+    print()
+    print("================================")
+    print("Starting SR Dynamic V2 Bot")
+    print("Symbol:", SYMBOL)
+    print("Timeframe:", INTERVAL)
+    print("Near:", NEAR_PERCENT, "%")
+    print("================================")
+
+    try:
+
+        # Get data
+        data = get_candles()
+
+        # Parse
+        candles = parse_candles(
+            data
+        )
+
+        if len(candles) < 20:
+
+            raise ValueError(
+                "Not enough candle data"
+            )
+
+        # Analyze
+        signal = analyze(
+            candles
+        )
+
+        # -------------------------------------------------
+        # Signal found
+        # -------------------------------------------------
+
+        if signal:
+
+            message = create_message(
+                signal
+            )
+
+            print()
+            print("========== SIGNAL ==========")
+            print(message)
+            print("============================")
+
+            send_telegram(
+                message
+            )
+
+        else:
+
+            print()
+            print("================================")
+            print("No signal")
+            print("Price is not near support/resistance")
+            print("================================")
+
+    except Exception as e:
+
+        print()
+        print("========== ERROR ==========")
+        print(type(e).__name__)
+        print(str(e))
+        print("============================")
+
+        raise
+
+
+# =========================================================
+# Run
+# =========================================================
 
 if __name__ == "__main__":
 
