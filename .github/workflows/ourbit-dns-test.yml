@@ -8,14 +8,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test DNS resolution
-             run: |
-          echo "Testing Ourbit DNS..."
-          echo "=== getent ==="
-          getent hosts contract.ourbit.com || true
+      - name: Test Ourbit DNS and Connection
+        run: |
+          echo "================================"
+          echo "Ourbit DNS Test"
+          echo "================================"
 
-          echo "=== nslookup ==="
-          nslookup contract.ourbit.com || true
+          echo ""
+          echo "=== GETENT ==="
+          getent hosts contract.ourbit.com || echo "getent FAILED"
 
-          echo "=== curl ==="
-          curl -I --connect-timeout 10 https://contract.ourbit.com || true 
+          echo ""
+          echo "=== NSLOOKUP ==="
+          nslookup contract.ourbit.com || echo "nslookup FAILED"
+
+          echo ""
+          echo "=== CURL ==="
+          curl -I --connect-timeout 10 https://contract.ourbit.com || echo "curl FAILED"
+
+          echo ""
+          echo "================================"
+          echo "DNS test finished"
+          echo "================================"
