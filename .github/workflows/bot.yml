@@ -1,64 +1,1180 @@
-name: Ourbit Crypto Bot
+import os
+import time
+import math
+import requests
+from datetime import datetime, timezone
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "*/15 * * * *"
+# ============================================================
+# CONFIG
+# ============================================================
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
+OURBIT_BASE_URL = "https://contract.ourbit.com"
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+# تعداد ارزهایی که بررسی می‌شود
+TOP_COINS = 100
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          else
-            pip install requests
-          fi
+# تایم فریم
+INTERVAL = "Min60"
 
-      - name: Test Ourbit DNS
-        run: |
-          echo "================================"
-          echo "OURBIT DNS TEST"
-          echo "================================"
-          getent hosts contract.ourbit.com || true
+# تعداد کندل برای محاسبات
+KLINE_LIMIT = 200
 
-      - name: Test Ourbit Connection
-        run: |
-          echo "================================"
-          echo "OURBIT CONNECTION TEST"
-          echo "================================"
-          curl -v \
-            --connect-timeout 15 \
-            --max-time 30 \
-            "https://contract.ourbit.com" \
-            || true
+# فاصله زمانی بین اجرای بررسی‌ها
+# GitHub Actions خودش زمان‌بندی را انجام می‌دهد،
+# بنابراین اینجا فقط یک بار اجرا می‌کنیم.
+REQUEST_TIMEOUT = 20
 
-      - name: Test Ourbit Kline API
-        run: |
-          echo "================================"
-          echo "OURBIT KLINE API TEST"
-          echo "================================"
-          curl -v \
-            --connect-timeout 15 \
-            --max-time 30 \
-            "https://contract.ourbit.com/api/v1/contract/kline/ETH_USDT?interval=Min15" \
-            || true
 
-      - name: Run python bot.py
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          python bot.py
+# ============================================================
+# HTTP SESSION
+# ============================================================
+
+session = requests.Session()
+
+session.headers.update({
+    "User-Agent": "Ourbit-Telegram-Bot/1.0",
+    "Accept": "application/json",
+})
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def send_telegram(message):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram settings are missing.")
+        return False
+
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
+    data = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        response = session.post(
+            url,
+            data=data,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        print("Telegram:", response.status_code)
+        print(response.text[:500])
+
+        return response.ok
+
+    except Exception as e:
+        print("Telegram error:", e)
+        return False
+
+
+# ============================================================
+# OURBIT REQUEST
+# ============================================================
+
+def ourbit_get(path, params=None):
+    url = OURBIT_BASE_URL + path
+
+    try:
+        response = session.get(
+            url,
+            params=params,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        print("OURBIT:", response.status_code, response.url)
+
+        response.raise_for_status()
+
+        return response.json()
+
+    except Exception as e:
+        print("Ourbit request error:", e)
+        return None
+
+
+# ============================================================
+# GET TICKERS
+# ============================================================
+
+def get_tickers():
+    data = ourbit_get("/api/v1/contract/ticker")
+
+    if data is None:
+        return []
+
+    # حالت‌های مختلف پاسخ API را بررسی می‌کنیم
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+
+        if isinstance(data.get("data"), list):
+            return data["data"]
+
+        if isinstance(data.get("data"), dict):
+            for key in ["data", "list", "rows", "result"]:
+                value = data["data"].get(key)
+
+                if isinstance(value, list):
+                    return value
+
+        for key in ["result", "list", "rows"]:
+            value = data.get(key)
+
+            if isinstance(value, list):
+                return value
+
+    print("Unknown ticker response:")
+    print(data)
+
+    return []
+
+
+# ============================================================
+# NUMBER HELPER
+# ============================================================
+
+def to_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+
+        return float(value)
+
+    except Exception:
+        return default
+
+
+# ============================================================
+# GET SYMBOL FROM TICKER
+# ============================================================
+
+def get_symbol(item):
+    if not isinstance(item, dict):
+        return None
+
+    for key in [
+        "symbol",
+        "contractSymbol",
+        "contract",
+        "market"
+    ]:
+        value = item.get(key)
+
+        if value:
+            return str(value)
+
+    return None
+
+
+# ============================================================
+# GET VOLUME FROM TICKER
+# ============================================================
+
+def get_volume(item):
+    if not isinstance(item, dict):
+        return 0
+
+    possible_keys = [
+        "amount24",
+        "volume24",
+        "volume",
+        "turnover24",
+        "turnover",
+        "quoteVolume",
+        "quote_volume",
+        "dealVolume",
+        "amount"
+    ]
+
+    for key in possible_keys:
+
+        if key in item:
+            value = to_float(item.get(key))
+
+            if value > 0:
+                return value
+
+    return 0
+
+
+# ============================================================
+# GET TOP 100 FUTURES
+# ============================================================
+
+def get_top_symbols():
+    tickers = get_tickers()
+
+    if not tickers:
+        print("No ticker data received.")
+        return []
+
+    markets = []
+
+    for item in tickers:
+
+        symbol = get_symbol(item)
+
+        if not symbol:
+            continue
+
+        symbol = symbol.upper()
+
+        # فقط قراردادهای USDT
+        if not symbol.endswith("_USDT"):
+            continue
+
+        volume = get_volume(item)
+
+        markets.append({
+            "symbol": symbol,
+            "volume": volume
+        })
+
+    # مرتب‌سازی بر اساس حجم
+    markets.sort(
+        key=lambda x: x["volume"],
+        reverse=True
+    )
+
+    top = markets[:TOP_COINS]
+
+    print("\nTOP SYMBOLS:")
+
+    for i, item in enumerate(top, 1):
+        print(
+            i,
+            item["symbol"],
+            item["volume"]
+        )
+
+    return [x["symbol"] for x in top]
+
+
+# ============================================================
+# GET KLINES
+# ============================================================
+
+def get_klines(symbol):
+    path = f"/api/v1/contract/kline/{symbol}"
+
+    now_ms = int(time.time() * 1000)
+
+    # حدود 200 ساعت قبل
+    start_ms = now_ms - (
+        KLINE_LIMIT * 60 * 60 * 1000
+    )
+
+    params = {
+        "interval": INTERVAL,
+        "start": start_ms,
+        "end": now_ms
+    }
+
+    data = ourbit_get(
+        path,
+        params=params
+    )
+
+    if data is None:
+        return []
+
+    # استخراج داده
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+
+        if isinstance(data.get("data"), list):
+            return data["data"]
+
+        if isinstance(data.get("data"), dict):
+
+            for key in [
+                "data",
+                "list",
+                "rows",
+                "result"
+            ]:
+
+                value = data["data"].get(key)
+
+                if isinstance(value, list):
+                    return value
+
+        for key in [
+            "result",
+            "list",
+            "rows"
+        ]:
+
+            value = data.get(key)
+
+            if isinstance(value, list):
+                return value
+
+    print("Unknown kline response:")
+    print(data)
+
+    return []
+
+
+# ============================================================
+# PARSE KLINES
+# ============================================================
+
+def parse_klines(raw):
+    candles = []
+
+    for item in raw:
+
+        try:
+
+            # اگر به صورت آرایه باشد
+            if isinstance(item, list):
+
+                if len(item) < 5:
+                    continue
+
+                timestamp = to_float(item[0])
+                open_price = to_float(item[1])
+                high = to_float(item[2])
+                low = to_float(item[3])
+                close = to_float(item[4])
+
+            # اگر به صورت object باشد
+            elif isinstance(item, dict):
+
+                timestamp = to_float(
+                    item.get("time")
+                    or item.get("timestamp")
+                    or item.get("ts")
+                )
+
+                open_price = to_float(
+                    item.get("open")
+                    or item.get("openPrice")
+                )
+
+                high = to_float(
+                    item.get("high")
+                    or item.get("highPrice")
+                )
+
+                low = to_float(
+                    item.get("low")
+                    or item.get("lowPrice")
+                )
+
+                close = to_float(
+                    item.get("close")
+                    or item.get("closePrice")
+                )
+
+            else:
+                continue
+
+            if close <= 0:
+                continue
+
+            candles.append({
+                "time": timestamp,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close
+            })
+
+        except Exception:
+            continue
+
+    candles.sort(
+        key=lambda x: x["time"]
+    )
+
+    return candles
+
+
+# ============================================================
+# RSI
+# ============================================================
+
+def calculate_rsi(closes, period=14):
+
+    if len(closes) < period + 1:
+        return None
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(closes)):
+
+        change = closes[i] - closes[i - 1]
+
+        if change > 0:
+            gains.append(change)
+            losses.append(0)
+
+        else:
+            gains.append(0)
+            losses.append(abs(change))
+
+    avg_gain = sum(
+        gains[:period]
+    ) / period
+
+    avg_loss = sum(
+        losses[:period]
+    ) / period
+
+    for i in range(period, len(gains)):
+
+        avg_gain = (
+            (avg_gain * (period - 1))
+            + gains[i]
+        ) / period
+
+        avg_loss = (
+            (avg_loss * (period - 1))
+            + losses[i]
+        ) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+
+    return 100 - (
+        100 / (1 + rs)
+    )
+
+
+# ============================================================
+# EMA
+# ============================================================
+
+def calculate_ema(values, period):
+
+    if len(values) < period:
+        return None
+
+    multiplier = 2 / (period + 1)
+
+    ema = sum(
+        values[:period]
+    ) / period
+
+    for value in values[period:]:
+
+        ema = (
+            (value - ema)
+            * multiplier
+        ) + ema
+
+    return ema
+
+
+# ============================================================
+# PIVOT
+# ============================================================
+
+def calculate_pivot(candles):
+
+    if len(candles) < 2:
+        return None
+
+    candle = candles[-2]
+
+    high = candle["high"]
+    low = candle["low"]
+    close = candle["close"]
+
+    pivot = (
+        high + low + close
+    ) / 3
+
+    r1 = (
+        2 * pivot
+    ) - low
+
+    s1 = (
+        2 * pivot
+    ) - high
+
+    r2 = pivot + (
+        high - low
+    )
+
+    s2 = pivot - (
+        high - low
+    )
+
+    return {
+        "pivot": pivot,
+        "r1": r1,
+        "s1": s1,
+        "r2": r2,
+        "s2": s2
+    }
+
+
+# ============================================================
+# SUPPORT / RESISTANCE
+# ============================================================
+
+def find_support_resistance(candles):
+
+    if len(candles) < 30:
+        return None, None
+
+    recent = candles[-50:]
+
+    lows = [
+        x["low"]
+        for x in recent
+    ]
+
+    highs = [
+        x["high"]
+        for x in recent
+    ]
+
+    support = min(lows)
+
+    resistance = max(highs)
+
+    return support, resistance
+
+
+# ============================================================
+# LOCAL LOW / HIGH
+# ============================================================
+
+def find_local_lows(values, window=2):
+
+    points = []
+
+    for i in range(
+        window,
+        len(values) - window
+    ):
+
+        current = values[i]
+
+        left = values[
+            i - window:i
+        ]
+
+        right = values[
+            i + 1:i + window + 1
+        ]
+
+        if (
+            current <= min(left)
+            and
+            current <= min(right)
+        ):
+            points.append(i)
+
+    return points
+
+
+def find_local_highs(values, window=2):
+
+    points = []
+
+    for i in range(
+        window,
+        len(values) - window
+    ):
+
+        current = values[i]
+
+        left = values[
+            i - window:i
+        ]
+
+        right = values[
+            i + 1:i + window + 1
+        ]
+
+        if (
+            current >= max(left)
+            and
+            current >= max(right)
+        ):
+            points.append(i)
+
+    return points
+
+
+# ============================================================
+# DIVERGENCE
+# ============================================================
+
+def calculate_rsi_series(closes, period=14):
+
+    if len(closes) < period + 1:
+        return []
+
+    result = [
+        None
+        for _ in closes
+    ]
+
+    gains = []
+    losses = []
+
+    for i in range(1, len(closes)):
+
+        change = closes[i] - closes[i - 1]
+
+        gains.append(
+            max(change, 0)
+        )
+
+        losses.append(
+            max(-change, 0)
+        )
+
+    avg_gain = sum(
+        gains[:period]
+    ) / period
+
+    avg_loss = sum(
+        losses[:period]
+    ) / period
+
+    if avg_loss == 0:
+        result[period] = 100
+    else:
+        rs = avg_gain / avg_loss
+        result[period] = (
+            100 - 100 / (1 + rs)
+        )
+
+    for i in range(
+        period,
+        len(gains)
+    ):
+
+        avg_gain = (
+            avg_gain * (period - 1)
+            + gains[i]
+        ) / period
+
+        avg_loss = (
+            avg_loss * (period - 1)
+            + losses[i]
+        ) / period
+
+        if avg_loss == 0:
+            result[i + 1] = 100
+        else:
+            rs = avg_gain / avg_loss
+
+            result[i + 1] = (
+                100 - 100 / (1 + rs)
+            )
+
+    return result
+
+
+def detect_divergence(candles):
+
+    if len(candles) < 50:
+        return None
+
+    closes = [
+        x["close"]
+        for x in candles
+    ]
+
+    rsi = calculate_rsi_series(
+        closes,
+        14
+    )
+
+    lows = find_local_lows(
+        closes,
+        3
+    )
+
+    highs = find_local_highs(
+        closes,
+        3
+    )
+
+    # فقط نقاطی که RSI دارند
+    lows = [
+        i for i in lows
+        if rsi[i] is not None
+    ]
+
+    highs = [
+        i for i in highs
+        if rsi[i] is not None
+    ]
+
+    # واگرایی مثبت:
+    # قیمت کف پایین‌تر
+    # RSI کف بالاتر
+    if len(lows) >= 2:
+
+        i1 = lows[-2]
+        i2 = lows[-1]
+
+        if (
+            closes[i2] < closes[i1]
+            and
+            rsi[i2] > rsi[i1]
+        ):
+
+            return {
+                "type": "BULLISH",
+                "index": i2
+            }
+
+    # واگرایی منفی:
+    # قیمت سقف بالاتر
+    # RSI سقف پایین‌تر
+    if len(highs) >= 2:
+
+        i1 = highs[-2]
+        i2 = highs[-1]
+
+        if (
+            closes[i2] > closes[i1]
+            and
+            rsi[i2] < rsi[i1]
+        ):
+
+            return {
+                "type": "BEARISH",
+                "index": i2
+            }
+
+    return None
+
+
+# ============================================================
+# ANALYZE SYMBOL
+# ============================================================
+
+def analyze_symbol(symbol):
+
+    print(
+        f"\nAnalyzing {symbol}..."
+    )
+
+    raw = get_klines(symbol)
+
+    candles = parse_klines(raw)
+
+    if len(candles) < 50:
+
+        print(
+            symbol,
+            "not enough candles:",
+            len(candles)
+        )
+
+        return None
+
+    closes = [
+        x["close"]
+        for x in candles
+    ]
+
+    current_price = closes[-1]
+
+    rsi = calculate_rsi(
+        closes,
+        14
+    )
+
+    pivot_data = calculate_pivot(
+        candles
+    )
+
+    support, resistance = (
+        find_support_resistance(
+            candles
+        )
+    )
+
+    divergence = detect_divergence(
+        candles
+    )
+
+    ema20 = calculate_ema(
+        closes,
+        20
+    )
+
+    ema50 = calculate_ema(
+        closes,
+        50
+    )
+
+    signal = None
+
+    # ------------------------------------------
+    # RSI
+    # ------------------------------------------
+
+    if rsi is not None:
+
+        if rsi <= 30:
+            signal = "LONG"
+
+        elif rsi >= 70:
+            signal = "SHORT"
+
+    # ------------------------------------------
+    # Divergence
+    # ------------------------------------------
+
+    if divergence:
+
+        if divergence["type"] == "BULLISH":
+            signal = "LONG"
+
+        elif divergence["type"] == "BEARISH":
+            signal = "SHORT"
+
+    # ------------------------------------------
+    # نزدیک حمایت / مقاومت
+    # ------------------------------------------
+
+    near_support = False
+    near_resistance = False
+
+    if support and support > 0:
+
+        support_distance = (
+            abs(current_price - support)
+            / current_price
+        )
+
+        if support_distance <= 0.015:
+            near_support = True
+
+    if resistance and resistance > 0:
+
+        resistance_distance = (
+            abs(current_price - resistance)
+            / current_price
+        )
+
+        if resistance_distance <= 0.015:
+            near_resistance = True
+
+    # ------------------------------------------
+    # ساخت نتیجه
+    # ------------------------------------------
+
+    result = {
+        "symbol": symbol,
+        "price": current_price,
+        "rsi": rsi,
+        "pivot": pivot_data,
+        "support": support,
+        "resistance": resistance,
+        "divergence": divergence,
+        "ema20": ema20,
+        "ema50": ema50,
+        "near_support": near_support,
+        "near_resistance": near_resistance,
+        "signal": signal
+    }
+
+    return result
+
+
+# ============================================================
+# FORMAT PRICE
+# ============================================================
+
+def format_price(price):
+
+    if price is None:
+        return "-"
+
+    if price >= 1000:
+        return f"{price:,.2f}"
+
+    if price >= 1:
+        return f"{price:.4f}"
+
+    if price >= 0.01:
+        return f"{price:.6f}"
+
+    return f"{price:.10f}"
+
+
+# ============================================================
+# CREATE TELEGRAM MESSAGE
+# ============================================================
+
+def create_message(result):
+
+    symbol = result["symbol"]
+
+    price = result["price"]
+
+    rsi = result["rsi"]
+
+    pivot = result["pivot"]
+
+    support = result["support"]
+
+    resistance = result["resistance"]
+
+    divergence = result["divergence"]
+
+    ema20 = result["ema20"]
+
+    ema50 = result["ema50"]
+
+    signal = result["signal"]
+
+    if signal == "LONG":
+        title = "🟢 سیگنال احتمالی LONG"
+
+    elif signal == "SHORT":
+        title = "🔴 سیگنال احتمالی SHORT"
+
+    else:
+        title = "⚪ هشدار بازار"
+
+    message = (
+        f"{title}\n\n"
+        f"💰 <b>{symbol}</b>\n"
+        f"⏱ تایم‌فریم: 1H\n"
+        f"💵 قیمت: <code>{format_price(price)}</code>\n"
+    )
+
+    if rsi is not None:
+        message += (
+            f"📊 RSI(14): "
+            f"<code>{rsi:.2f}</code>\n"
+        )
+
+    if ema20:
+        message += (
+            f"EMA20: "
+            f"<code>{format_price(ema20)}</code>\n"
+        )
+
+    if ema50:
+        message += (
+            f"EMA50: "
+            f"<code>{format_price(ema50)}</code>\n"
+        )
+
+    if pivot:
+
+        message += (
+            "\n📌 <b>Pivot</b>\n"
+            f"P: {format_price(pivot['pivot'])}\n"
+            f"R1: {format_price(pivot['r1'])}\n"
+            f"R2: {format_price(pivot['r2'])}\n"
+            f"S1: {format_price(pivot['s1'])}\n"
+            f"S2: {format_price(pivot['s2'])}\n"
+        )
+
+    if support:
+
+        message += (
+            "\n🟢 حمایت تقریبی: "
+            f"<code>{format_price(support)}</code>\n"
+        )
+
+    if resistance:
+
+        message += (
+            "🔴 مقاومت تقریبی: "
+            f"<code>{format_price(resistance)}</code>\n"
+        )
+
+    if divergence:
+
+        if divergence["type"] == "BULLISH":
+
+            message += (
+                "\n📈 واگرایی مثبت RSI "
+                "شناسایی شد."
+            )
+
+        elif divergence["type"] == "BEARISH":
+
+            message += (
+                "\n📉 واگرایی منفی RSI "
+                "شناسایی شد."
+            )
+
+    if result["near_support"]:
+
+        message += (
+            "\n🟢 قیمت نزدیک محدوده حمایت است."
+        )
+
+    if result["near_resistance"]:
+
+        message += (
+            "\n🔴 قیمت نزدیک محدوده مقاومت است."
+        )
+
+    message += (
+        "\n\n⚠️ این پیام صرفاً هشدار "
+        "تحلیلی است و معامله‌ای انجام نمی‌دهد."
+    )
+
+    return message
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print("=" * 60)
+    print("OURBIT FUTURES TELEGRAM BOT")
+    print("=" * 60)
+
+    print(
+        "Time:",
+        datetime.now(
+            timezone.utc
+        ).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+    )
+
+    # تست تلگرام
+    if not TELEGRAM_BOT_TOKEN:
+        print(
+            "ERROR: TELEGRAM_BOT_TOKEN "
+            "is not configured."
+        )
+        return
+
+    if not TELEGRAM_CHAT_ID:
+        print(
+            "ERROR: TELEGRAM_CHAT_ID "
+            "is not configured."
+        )
+        return
+
+    # دریافت 100 ارز
+    symbols = get_top_symbols()
+
+    if not symbols:
+
+        send_telegram(
+            "❌ ربات نتوانست لیست ارزهای "
+            "فیوچرز Ourbit را دریافت کند."
+        )
+
+        return
+
+    print(
+        f"\nFound {len(symbols)} symbols."
+    )
+
+    alerts = []
+
+    # بررسی ارزها
+    for index, symbol in enumerate(
+        symbols,
+        1
+    ):
+
+        print(
+            f"[{index}/{len(symbols)}] "
+            f"{symbol}"
+        )
+
+        try:
+
+            result = analyze_symbol(
+                symbol
+            )
+
+            if result is None:
+                continue
+
+            # فقط موارد دارای سیگنال
+            if result["signal"]:
+
+                alerts.append(result)
+
+        except Exception as e:
+
+            print(
+                "Analysis error:",
+                symbol,
+                e
+            )
+
+        # جلوگیری از فشار زیاد روی API
+        time.sleep(0.15)
+
+    print(
+        "\nTotal alerts:",
+        len(alerts)
+    )
+
+    # --------------------------------------------------------
+    # ارسال هشدارها
+    # --------------------------------------------------------
+
+    if not alerts:
+
+        print(
+            "No signal found."
+        )
+
+        # فعلاً پیام بدون سیگنال نمی‌فرستیم
+        return
+
+    # حداکثر 20 هشدار در هر اجرا
+    alerts = alerts[:20]
+
+    for result in alerts:
+
+        message = create_message(
+            result
+        )
+
+        print(
+            "\nSending:",
+            result["symbol"]
+        )
+
+        send_telegram(
+            message
+        )
+
+        time.sleep(0.5)
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+if __name__ == "__main__":
+    main()
