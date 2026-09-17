@@ -8,7 +8,7 @@ import pandas as pd
 
 SYMBOL = "ETH_USDT"
 INTERVAL = "Min15"
-NEAR_PERCENT = 0.3
+NEAR_PERCENT = 0.5
 
 OURBIT_URL = "https://futures.ourbit.com/api/v1/contract/kline/ETH_USDT"
 
