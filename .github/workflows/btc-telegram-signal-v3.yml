@@ -1,4 +1,4 @@
-name: BTC 1H Signal Telegram V3
+name: ETH 15M Signal Telegram V3
 
 on:
   workflow_dispatch:
@@ -8,15 +8,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test BTC 1H API
+      - name: Test ETH 15M API
         run: |
-          echo "Testing BTCUSDT 1H candles..."
+          echo "Testing ETHUSDT 15M candles..."
 
           curl -L \
             -A "Mozilla/5.0" \
             --max-time 30 \
             -sS \
             -w "\nHTTP_STATUS:%{http_code}\n" \
-            "https://futures.ourbit.com/api/v1/contract/kline/BTCUSDT?interval=60m&limit=10"
+            "https://futures.ourbit.com/api/v1/contract/kline/ETHUSDT?interval=15m&limit=20"
 
           echo "Test finished."
