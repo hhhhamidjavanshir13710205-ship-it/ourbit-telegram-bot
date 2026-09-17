@@ -27,33 +27,46 @@ jobs:
             pip install requests
           fi
 
-      - name: Test Ourbit DNS
+      - name: Test Ourbit Domains
         run: |
           echo "================================"
-          echo "OURBIT DNS TEST"
+          echo "OURBIT DOMAIN TEST"
           echo "================================"
-          getent hosts contract.ourbit.com || true
 
-      - name: Test Ourbit Connection
+          echo ""
+          echo "1. contract.ourbit.com"
+          getent hosts contract.ourbit.com || echo "DNS FAILED"
+
+          echo ""
+          echo "2. futures.ourbit.com"
+          getent hosts futures.ourbit.com || echo "DNS FAILED"
+
+          echo ""
+          echo "3. www.ourbit.com"
+          getent hosts www.ourbit.com || echo "DNS FAILED"
+
+      - name: Test Contract API
         run: |
           echo "================================"
-          echo "OURBIT CONNECTION TEST"
+          echo "OURBIT CONTRACT API TEST"
           echo "================================"
+
           curl -v \
             --connect-timeout 15 \
             --max-time 30 \
-            "https://contract.ourbit.com" \
+            "https://contract.ourbit.com/api/v1/contract/ping" \
             || true
 
-      - name: Test Ourbit Kline API
+      - name: Test Futures API
         run: |
           echo "================================"
-          echo "OURBIT KLINE API TEST"
+          echo "OURBIT FUTURES API TEST"
           echo "================================"
+
           curl -v \
             --connect-timeout 15 \
             --max-time 30 \
-            "https://contract.ourbit.com/api/v1/contract/kline/ETH_USDT?interval=Min15" \
+            "https://futures.ourbit.com/api/v1/contract/ping" \
             || true
 
       - name: Run python bot.py
