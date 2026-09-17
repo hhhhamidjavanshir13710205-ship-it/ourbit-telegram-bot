@@ -1,4 +1,4 @@
-name: Test BTC 5M Kline
+name: Test BTC 5M Futures
 
 on:
   workflow_dispatch:
@@ -8,10 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Test BTCUSDT 5M Kline
+      - name: Test Ourbit BTCUSDT 5M
         run: |
           python - <<'PY'
           import requests
@@ -22,18 +19,15 @@ jobs:
           print("🧪 OURBIT BTC/USDT FUTURES - 5M TEST")
           print("======================================")
 
-          url = "https://api.ourbit.com/api/v1/contract/kline"
+          url = "https://contract.ourbit.com/api/v1/contract/kline/BTC_USDT"
 
           params = {
-              "symbol": "BTCUSDT",
-              "interval": "5m",
-              "limit": 5
+              "interval": "Min5"
           }
 
-          print("📡 Connecting to Ourbit...")
-          print(f"Symbol   : {params['symbol']}")
-          print(f"Interval : {params['interval']}")
-          print(f"Limit    : {params['limit']}")
+          print("📡 Connecting to Ourbit Futures...")
+          print(f"Symbol   : BTC_USDT")
+          print(f"Interval : Min5")
           print("")
 
           response = requests.get(
@@ -45,41 +39,24 @@ jobs:
           print(f"HTTP Status: {response.status_code}")
           print("")
 
+          print("📦 RAW RESPONSE:")
+          print(response.text[:5000])
+
           response.raise_for_status()
 
           data = response.json()
-
-          print("📦 RAW API RESPONSE:")
-          print(json.dumps(data, indent=2, ensure_ascii=False))
 
           print("")
           print("======================================")
           print("✅ API RESPONSE RECEIVED")
           print("======================================")
 
-          # نمایش چند کندل آخر در صورت وجود ساختار لیستی
-          candles = None
-
-          if isinstance(data, list):
-              candles = data
-
-          elif isinstance(data, dict):
-              for key in ["data", "result", "rows", "list"]:
-                  if isinstance(data.get(key), list):
-                      candles = data[key]
-                      break
-
-          if candles:
-              print("")
-              print("📊 LAST CANDLES:")
-
-              for candle in candles:
-                  print(candle)
+          print(json.dumps(data, indent=2, ensure_ascii=False))
 
           print("")
           print("🕐 Test time:")
           print(datetime.now(timezone.utc).isoformat())
 
           print("")
-          print("🎉 BTC 5M TEST FINISHED")
+          print("🎉 BTC 5M FUTURES TEST FINISHED")
           PY
