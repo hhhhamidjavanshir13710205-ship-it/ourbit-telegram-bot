@@ -1,6 +1,5 @@
 import os
 import requests
-import time
 
 # =========================
 # SETTINGS
@@ -14,7 +13,7 @@ INTERVAL = "15m"
 
 CANDLE_LIMIT = 100
 
-# درصد فاصله برای هشدار نزدیک شدن قیمت
+# فاصله مجاز قیمت از حمایت/مقاومت
 NEAR_PERCENT = 0.30
 
 API_URL = (
@@ -22,7 +21,9 @@ API_URL = (
     f"{SYMBOL}?interval={INTERVAL}&limit={CANDLE_LIMIT}"
 )
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+TELEGRAM_URL = (
+    f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+)
 
 
 # =========================
@@ -41,6 +42,7 @@ def send_telegram(message):
     )
 
     print("Telegram:", response.status_code)
+    print(response.text)
 
     return response
 
@@ -65,6 +67,8 @@ def get_candles():
 
     data = response.json()
 
+    print("Ourbit response type:", type(data))
+
     return data
 
 
@@ -74,6 +78,12 @@ def get_candles():
 
 def parse_candles(data):
 
+    raw = None
+
+    # -------------------------
+    # Dictionary response
+    # -------------------------
+
     if isinstance(data, dict):
 
         raw = data.get("data")
@@ -81,20 +91,59 @@ def parse_candles(data):
         if raw is None:
             raw = data.get("result")
 
-    else:
+        if raw is None:
+            raw = data.get("rows")
+
+        # بعضی API ها داده را داخل result/data تو در تو می‌گذارند
+        if isinstance(raw, dict):
+
+            raw = (
+                raw.get("data")
+                or raw.get("rows")
+                or raw.get("list")
+                or raw.get("result")
+            )
+
+    # -------------------------
+    # Direct list response
+    # -------------------------
+
+    elif isinstance(data, list):
+
         raw = data
 
+    # -------------------------
+    # Empty response
+    # -------------------------
+
     if not raw:
-        raise ValueError("Candle data is empty")
+
+        print("========== DEBUG RESPONSE ==========")
+        print(data)
+        print("====================================")
+
+        raise ValueError(
+            "Candle data is empty"
+        )
 
     candles = []
+
+    # =========================
+    # PARSE EACH CANDLE
+    # =========================
 
     for c in raw:
 
         try:
 
-            # Ourbit ممکن است آرایه‌ای از مقادیر OHLC برگرداند
+            # ---------------------
+            # Array format
+            # ---------------------
+
             if isinstance(c, list):
+
+                if len(c) < 5:
+                    continue
 
                 timestamp = float(c[0])
                 open_price = float(c[1])
@@ -102,16 +151,56 @@ def parse_candles(data):
                 low = float(c[3])
                 close = float(c[4])
 
-            else:
+            # ---------------------
+            # Dictionary format
+            # ---------------------
+
+            elif isinstance(c, dict):
 
                 timestamp = float(
-                    c.get("timestamp", c.get("time", 0))
+                    c.get(
+                        "timestamp",
+                        c.get(
+                            "time",
+                            c.get(
+                                "ts",
+                                c.get("t", 0)
+                            )
+                        )
+                    )
                 )
 
-                open_price = float(c["open"])
-                high = float(c["high"])
-                low = float(c["low"])
-                close = float(c["close"])
+                open_price = float(
+                    c.get(
+                        "open",
+                        c.get("o")
+                    )
+                )
+
+                high = float(
+                    c.get(
+                        "high",
+                        c.get("h")
+                    )
+                )
+
+                low = float(
+                    c.get(
+                        "low",
+                        c.get("l")
+                    )
+                )
+
+                close = float(
+                    c.get(
+                        "close",
+                        c.get("c")
+                    )
+                )
+
+            else:
+
+                continue
 
             candles.append({
                 "time": timestamp,
@@ -121,15 +210,39 @@ def parse_candles(data):
                 "close": close
             })
 
-        except Exception:
+        except Exception as e:
+
+            print(
+                "Candle parse error:",
+                e
+            )
+
             continue
 
+    # =========================
+    # CHECK RESULT
+    # =========================
+
+    print(
+        "Parsed candles:",
+        len(candles)
+    )
+
     if len(candles) < 20:
+
+        print(
+            "Raw candle data:"
+        )
+
+        print(raw)
+
         raise ValueError(
             f"Not enough candles: {len(candles)}"
         )
 
-    candles.sort(key=lambda x: x["time"])
+    candles.sort(
+        key=lambda x: x["time"]
+    )
 
     return candles
 
@@ -138,7 +251,10 @@ def parse_candles(data):
 # FIND PIVOTS
 # =========================
 
-def find_pivots(candles, strength=3):
+def find_pivots(
+    candles,
+    strength=3
+):
 
     supports = []
     resistances = []
@@ -158,7 +274,10 @@ def find_pivots(candles, strength=3):
             i + 1:i + strength + 1
         ]
 
-        # Pivot Low = حمایت احتمالی
+        # -------------------------
+        # Pivot Low = Support
+        # -------------------------
+
         if all(
             current["low"] <= x["low"]
             for x in left + right
@@ -168,7 +287,10 @@ def find_pivots(candles, strength=3):
                 current["low"]
             )
 
-        # Pivot High = مقاومت احتمالی
+        # -------------------------
+        # Pivot High = Resistance
+        # -------------------------
+
         if all(
             current["high"] >= x["high"]
             for x in left + right
@@ -182,10 +304,13 @@ def find_pivots(candles, strength=3):
 
 
 # =========================
-# MERGE NEAR LEVELS
+# MERGE LEVELS
 # =========================
 
-def merge_levels(levels, tolerance=0.003):
+def merge_levels(
+    levels,
+    tolerance=0.003
+):
 
     if not levels:
         return []
@@ -198,44 +323,57 @@ def merge_levels(levels, tolerance=0.003):
 
     for level in levels[1:]:
 
-        average = sum(current) / len(current)
+        average = (
+            sum(current)
+            / len(current)
+        )
 
-        if abs(level - average) / average <= tolerance:
+        if (
+            abs(level - average)
+            / average
+            <= tolerance
+        ):
 
             current.append(level)
 
         else:
 
             merged.append(
-                sum(current) / len(current)
+                sum(current)
+                / len(current)
             )
 
             current = [level]
 
     merged.append(
-        sum(current) / len(current)
+        sum(current)
+        / len(current)
     )
 
     return merged
 
 
 # =========================
-# FIND NEAREST LEVEL
+# NEAREST LEVEL
 # =========================
 
-def nearest_level(price, levels):
+def nearest_level(
+    price,
+    levels
+):
 
     if not levels:
         return None
 
     return min(
         levels,
-        key=lambda x: abs(x - price)
+        key=lambda x:
+        abs(x - price)
     )
 
 
 # =========================
-# SIGNAL
+# CHECK SIGNAL
 # =========================
 
 def check_signal(
@@ -257,12 +395,21 @@ def check_signal(
     support_signal = False
     resistance_signal = False
 
-    if support:
+    # -------------------------
+    # Support
+    # -------------------------
+
+    if support is not None:
 
         distance = (
             abs(price - support)
             / price
             * 100
+        )
+
+        print(
+            f"Support distance: "
+            f"{distance:.4f}%"
         )
 
         if (
@@ -272,12 +419,21 @@ def check_signal(
 
             support_signal = True
 
-    if resistance:
+    # -------------------------
+    # Resistance
+    # -------------------------
+
+    if resistance is not None:
 
         distance = (
             abs(price - resistance)
             / price
             * 100
+        )
+
+        print(
+            f"Resistance distance: "
+            f"{distance:.4f}%"
         )
 
         if (
@@ -302,25 +458,61 @@ def check_signal(
 def main():
 
     print(
-        f"Starting SR Dynamic V2 "
-        f"Bot: {SYMBOL} {INTERVAL}"
+        "================================"
     )
+
+    print(
+        "Starting SR Dynamic V2 Bot"
+    )
+
+    print(
+        f"Symbol: {SYMBOL}"
+    )
+
+    print(
+        f"Timeframe: {INTERVAL}"
+    )
+
+    print(
+        "================================"
+    )
+
+    # =========================
+    # GET DATA
+    # =========================
 
     data = get_candles()
 
+    # =========================
+    # PARSE
+    # =========================
+
     candles = parse_candles(data)
 
-    # آخرین کندل بسته‌شده
+    # =========================
+    # LAST CLOSED CANDLE
+    # =========================
+
     closed = candles[-2]
 
     price = closed["close"]
 
-    print("Price:", price)
+    print(
+        f"Price: {price:.4f}"
+    )
+
+    # =========================
+    # FIND LEVELS
+    # =========================
 
     supports, resistances = find_pivots(
         candles,
         strength=3
     )
+
+    # =========================
+    # MERGE LEVELS
+    # =========================
 
     supports = merge_levels(
         supports
@@ -330,8 +522,19 @@ def main():
         resistances
     )
 
-    print("Supports:", supports)
-    print("Resistances:", resistances)
+    print(
+        "Supports:",
+        supports
+    )
+
+    print(
+        "Resistances:",
+        resistances
+    )
+
+    # =========================
+    # SIGNAL
+    # =========================
 
     (
         near_support,
@@ -344,9 +547,9 @@ def main():
         resistances
     )
 
-    # =====================
+    # =========================
     # SUPPORT ALERT
-    # =====================
+    # =========================
 
     if near_support:
 
@@ -362,14 +565,15 @@ def main():
             f"💰 قیمت: {price:.4f}\n"
             f"🟢 حمایت: {support:.4f}\n"
             f"📏 فاصله: {distance:.2f}%\n\n"
-            "⚠️ قیمت به محدوده حمایت نزدیک شده است."
+            "⚠️ قیمت به محدوده حمایت "
+            "نزدیک شده است."
         )
 
         send_telegram(message)
 
-    # =====================
+    # =========================
     # RESISTANCE ALERT
-    # =====================
+    # =========================
 
     elif near_resistance:
 
@@ -385,10 +589,15 @@ def main():
             f"💰 قیمت: {price:.4f}\n"
             f"🔴 مقاومت: {resistance:.4f}\n"
             f"📏 فاصله: {distance:.2f}%\n\n"
-            "⚠️ قیمت به محدوده مقاومت نزدیک شده است."
+            "⚠️ قیمت به محدوده مقاومت "
+            "نزدیک شده است."
         )
 
         send_telegram(message)
+
+    # =========================
+    # NO SIGNAL
+    # =========================
 
     else:
 
@@ -398,5 +607,10 @@ def main():
         )
 
 
+# =========================
+# START
+# =========================
+
 if __name__ == "__main__":
+
     main()
