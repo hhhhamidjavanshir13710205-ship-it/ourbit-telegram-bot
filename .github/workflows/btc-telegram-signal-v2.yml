@@ -1,0 +1,114 @@
+name: BTC 1H Signal Telegram V2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  btc-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTC 1H data
+        id: btc
+        shell: bash
+        run: |
+          set -e
+
+          echo "Getting BTCUSDT 1H candle from Ourbit..."
+
+          RESPONSE=$(curl -sS \
+            "https://api.ourbit.com/api/v3/klines?symbol=BTCUSDT&interval=60m&limit=2")
+
+          echo "Ourbit response:"
+          echo "$RESPONSE"
+
+          python3 -c '
+          import json
+          import sys
+
+          data = json.loads(sys.stdin.read())
+
+          if not data:
+              raise Exception("No BTC data received")
+
+          candle = data[-1]
+
+          open_price = float(candle[1])
+          high_price = float(candle[2])
+          low_price = float(candle[3])
+          close_price = float(candle[4])
+          volume = float(candle[5])
+
+          change = ((close_price - open_price) / open_price) * 100
+
+          print(f"OPEN={open_price}")
+          print(f"HIGH={high_price}")
+          print(f"LOW={low_price}")
+          print(f"CLOSE={close_price}")
+          print(f"VOLUME={volume}")
+          print(f"CHANGE={change:.2f}")
+          ' <<< "$RESPONSE" > btc_data.txt
+
+          cat btc_data.txt
+
+          cat btc_data.txt >> "$GITHUB_OUTPUT"
+
+      - name: Send BTC signal to Telegram
+        shell: bash
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          OPEN=$(grep '^OPEN=' btc_data.txt | cut -d= -f2)
+          HIGH=$(grep '^HIGH=' btc_data.txt | cut -d= -f2)
+          LOW=$(grep '^LOW=' btc_data.txt | cut -d= -f2)
+          CLOSE=$(grep '^CLOSE=' btc_data.txt | cut -d= -f2)
+          VOLUME=$(grep '^VOLUME=' btc_data.txt | cut -d= -f2)
+          CHANGE=$(grep '^CHANGE=' btc_data.txt | cut -d= -f2)
+
+          if (( $(echo "$CHANGE > 0" | bc -l) )); then
+            STATUS="🟢 صعودی"
+          elif (( $(echo "$CHANGE < 0" | bc -l) )); then
+            STATUS="🔴 نزولی"
+          else
+            STATUS="⚪ بدون تغییر"
+          fi
+
+          MESSAGE="₿ BTC/USDT — سیگنال 1H
+
+━━━━━━━━━━━━━━
+
+💰 Close: $CLOSE
+
+🔓 Open: $OPEN
+⬆️ High: $HIGH
+⬇️ Low: $LOW
+📊 Volume: $VOLUME
+
+$STATUS
+📌 تغییر کندل: ${CHANGE}%
+
+━━━━━━━━━━━━━━
+✅ Data: Ourbit"
+
+          echo "Sending message to Telegram..."
+
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST \
+            "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}")
+
+          echo "Telegram response:"
+          echo "$RESPONSE"
+
+          STATUS_CODE=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+
+          if [ "$STATUS_CODE" != "200" ]; then
+            echo "ERROR: Telegram returned HTTP $STATUS_CODE"
+            exit 1
+          fi
+
+          echo "✅ BTC signal sent successfully!"
