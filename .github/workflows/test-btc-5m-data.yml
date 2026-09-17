@@ -1,0 +1,70 @@
+name: Test BTC 5M Data
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-btc-5m-data:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTCUSDT 5M Candles
+        run: |
+          python - <<'PY'
+          import requests
+          from datetime import datetime, timezone
+
+          url = "https://api.ourbit.com/api/v3/klines"
+
+          params = {
+              "symbol": "BTCUSDT",
+              "interval": "5m",
+              "limit": 5
+          }
+
+          print("======================================")
+          print("🧪 OURBIT BTCUSDT 5M DATA")
+          print("======================================")
+
+          response = requests.get(
+              url,
+              params=params,
+              timeout=20
+          )
+
+          print("HTTP Status:", response.status_code)
+
+          response.raise_for_status()
+
+          data = response.json()
+
+          print("")
+          print("📊 LAST 5 CANDLES")
+          print("--------------------------------------")
+
+          for i, candle in enumerate(data, 1):
+
+              timestamp = int(candle[0])
+              dt = datetime.fromtimestamp(
+                  timestamp / 1000,
+                  tz=timezone.utc
+              )
+
+              open_price = candle[1]
+              high_price = candle[2]
+              low_price = candle[3]
+              close_price = candle[4]
+              volume = candle[5]
+
+              print(f"Candle #{i}")
+              print(f"Time   : {dt}")
+              print(f"Open   : {open_price}")
+              print(f"High   : {high_price}")
+              print(f"Low    : {low_price}")
+              print(f"Close  : {close_price}")
+              print(f"Volume : {volume}")
+              print("--------------------------------------")
+
+          print("")
+          print("✅ BTCUSDT 5M DATA TEST SUCCESSFUL")
+          PY
