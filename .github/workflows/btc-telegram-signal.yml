@@ -1,0 +1,101 @@
+name: BTC 1H Signal Telegram
+
+on:
+  workflow_dispatch:
+
+jobs:
+  btc-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTC 1H data and send to Telegram
+        shell: bash
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -e
+
+          echo "Getting BTCUSDT 1H candle from Ourbit..."
+
+          RESPONSE=$(curl -sS \
+            "https://api.ourbit.com/api/v3/klines?symbol=BTCUSDT&interval=60m&limit=2")
+
+          echo "Ourbit response:"
+          echo "$RESPONSE"
+
+          python3 - "$RESPONSE" <<'PY'
+          import sys
+          import json
+          import urllib.request
+          import urllib.parse
+
+          data = json.loads(sys.argv[1])
+
+          if not data or len(data) < 1:
+              raise Exception("No BTC candle data received")
+
+          candle = data[-1]
+
+          open_price = float(candle[1])
+          high_price = float(candle[2])
+          low_price = float(candle[3])
+          close_price = float(candle[4])
+          volume = float(candle[5])
+
+          change = ((close_price - open_price) / open_price) * 100
+
+          if change > 0:
+              direction = "🟢 صعودی"
+              emoji = "📈"
+          elif change < 0:
+              direction = "🔴 نزولی"
+              emoji = "📉"
+          else:
+              direction = "⚪ بدون تغییر"
+              emoji = "➡️"
+
+          message = (
+              "₿ BTC/USDT — سیگنال 1H\n"
+              "━━━━━━━━━━━━━━\n\n"
+              f"💰 قیمت بسته شدن: {close_price:,.2f}\n\n"
+              f"🔓 Open: {open_price:,.2f}\n"
+              f"⬆️ High: {high_price:,.2f}\n"
+              f"⬇️ Low: {low_price:,.2f}\n"
+              f"📊 Volume: {volume:,.4f}\n\n"
+              f"{emoji} وضعیت کندل: {direction}\n"
+              f"📌 تغییر کندل: {change:+.2f}%\n\n"
+              "━━━━━━━━━━━━━━\n"
+              "✅ Data: Ourbit"
+          )
+
+          telegram_url = (
+              f"https://api.telegram.org/bot{sys.argv[2]}/sendMessage"
+          )
+
+          payload = urllib.parse.urlencode({
+              "chat_id": sys.argv[3],
+              "text": message
+          }).encode()
+
+          request = urllib.request.Request(
+              telegram_url,
+              data=payload,
+              method="POST"
+          )
+
+          with urllib.request.urlopen(request, timeout=20) as response:
+              result = json.loads(response.read().decode())
+
+          print("Telegram response:")
+          print(result)
+
+          if not result.get("ok"):
+              raise Exception("Telegram message failed")
+
+          print("✅ BTC signal sent successfully!")
+          PY
+          "$TELEGRAM_TOKEN" "$TELEGRAM_CHAT_ID"
+
+      - name: Done
+        run: echo "✅ BTC 1H signal workflow completed successfully."
