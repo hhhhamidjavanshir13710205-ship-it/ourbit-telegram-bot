@@ -1,0 +1,23 @@
+name: Ourbit API Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Ourbit API
+        run: |
+          echo "=== DNS ==="
+          getent hosts api.ourbit.com || true
+
+          echo ""
+          echo "=== HTTPS ==="
+          curl -I -L --max-time 20 https://api.ourbit.com
+
+          echo ""
+          echo "=== KLINE ==="
+          curl -sS --max-time 20 \
+            "https://api.ourbit.com/api/v3/klines?symbol=BTCUSDT&interval=1m"
