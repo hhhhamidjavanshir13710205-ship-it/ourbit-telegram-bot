@@ -1,0 +1,60 @@
+name: BTC Signal Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  btc-signal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get BTC 1H Signal Data
+        run: |
+          python - <<'PY'
+          import requests
+          from datetime import datetime, timezone
+
+          url = "https://api.ourbit.com/api/v3/klines"
+
+          params = {
+              "symbol": "BTCUSDT",
+              "interval": "60m",
+              "limit": 2
+          }
+
+          r = requests.get(
+              url,
+              params=params,
+              timeout=20
+          )
+
+          r.raise_for_status()
+
+          candles = r.json()
+
+          last = candles[-1]
+
+          time = datetime.fromtimestamp(
+              int(last[0]) / 1000,
+              tz=timezone.utc
+          )
+
+          open_price = last[1]
+          high = last[2]
+          low = last[3]
+          close = last[4]
+          volume = last[5]
+
+          print("================================")
+          print("📊 BTCUSDT 1H SIGNAL TEST")
+          print("================================")
+          print(f"Time   : {time}")
+          print(f"Open   : {open_price}")
+          print(f"High   : {high}")
+          print(f"Low    : {low}")
+          print(f"Close  : {close}")
+          print(f"Volume : {volume}")
+          print("================================")
+
+          print("✅ SIGNAL DATA READY")
+          PY
