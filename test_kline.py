@@ -3,10 +3,30 @@ import pandas as pd
 
 SYMBOL = "BTC_USDT"
 INTERVAL = "Min60"
+RSI_PERIOD = 14
 
 URL = f"https://futures.ourbit.com/api/v1/contract/kline/{SYMBOL}"
 
+
+def calculate_rsi(series, period=14):
+
+    delta = series.diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    average_gain = gain.rolling(period).mean()
+    average_loss = loss.rolling(period).mean()
+
+    rs = average_gain / average_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi
+
+
 try:
+
     response = requests.get(
         URL,
         params={"interval": INTERVAL},
@@ -24,10 +44,6 @@ try:
 
     data = result.get("data")
 
-    print("Data type:", type(data))
-    print("Data keys:", list(data.keys()))
-
-    # ساخت DataFrame
     df = pd.DataFrame({
         "time": data["time"],
         "open": data["open"],
@@ -36,7 +52,6 @@ try:
         "close": data["close"]
     })
 
-    # تبدیل قیمت‌ها به عدد
     for column in ["open", "high", "low", "close"]:
         df[column] = pd.to_numeric(
             df[column],
@@ -45,26 +60,26 @@ try:
 
     df = df.dropna()
 
+    # RSI 14
+    df["RSI14"] = calculate_rsi(
+        df["close"],
+        RSI_PERIOD
+    )
+
     print()
-    print("========== KLINE DATA ==========")
+    print("========== RSI TEST ==========")
+    print("Symbol:", SYMBOL)
+    print("Timeframe:", INTERVAL)
     print("Candles:", len(df))
+    print("RSI Period:", RSI_PERIOD)
     print()
-    print(df.tail(3).to_string(index=False))
-
-    # فقط 20 کندل آخر
-    recent = df.tail(20)
-
-    support = recent["low"].min()
-    resistance = recent["high"].max()
-    price = df["close"].iloc[-1]
-
+    print(df[["time", "close", "RSI14"]].tail(10).to_string(index=False))
     print()
-    print("========== SUPPORT / RESISTANCE ==========")
-    print("Price:", price)
-    print("Support:", support)
-    print("Resistance:", resistance)
-    print("==========================================")
+    print("Current Price:", df["close"].iloc[-1])
+    print("Current RSI14:", df["RSI14"].iloc[-1])
+    print("==============================")
 
 except Exception as e:
+
     print("ERROR:", e)
     raise
