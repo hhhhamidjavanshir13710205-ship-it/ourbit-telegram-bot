@@ -79,3 +79,6 @@ jobs:
       - name: Test Symbols API
         run: |
           python test_symbols.py
+                - name: Test Kline API
+        run: |
+          python test_kline.py
