@@ -87,46 +87,96 @@ try:
     top_100 = get_top_100()
 
     print()
-    print("========== TOP 5 KLINE TEST ==========")
+    print("======================================")
+    print("TOP 100 KLINE TEST")
+    print("======================================")
+
+    success_count = 0
+    error_count = 0
 
     for index, item in enumerate(
-        top_100[:5],
+        top_100,
         1
     ):
 
         symbol = item.get("symbol")
 
         print()
-        print(f"{index}. {symbol}")
-
-        data = get_kline(symbol)
-
-        candle_count = len(
-            data.get("time", [])
-        )
-
         print(
-            "Kline candles:",
-            candle_count
+            f"[{index}/100] {symbol}"
         )
 
-        print(
-            "Last close:",
-            data.get("close", [])[-1]
-        )
+        try:
 
-        print("Status: OK")
+            data = get_kline(symbol)
 
-        # کمی فاصله بین درخواست‌ها
+            candles = len(
+                data.get("time", [])
+            )
+
+            closes = data.get(
+                "close",
+                []
+            )
+
+            if not closes:
+                raise ValueError(
+                    "No close prices"
+                )
+
+            last_close = closes[-1]
+
+            print(
+                "Kline candles:",
+                candles
+            )
+
+            print(
+                "Last close:",
+                last_close
+            )
+
+            print("Status: OK")
+
+            success_count += 1
+
+        except Exception as e:
+
+            print(
+                "Status: ERROR"
+            )
+
+            print(
+                "Error:",
+                e
+            )
+
+            error_count += 1
+
+        # فاصله بین درخواست‌ها
         time.sleep(1)
 
     print()
     print("======================================")
-    print("5 symbols Kline test completed.")
+    print("FINAL RESULT")
     print("======================================")
+    print(
+        "Successful:",
+        success_count
+    )
+    print(
+        "Errors:",
+        error_count
+    )
+    print(
+        "Total:",
+        len(top_100)
+    )
+    print("======================================")
+
 
 except Exception as e:
 
     print()
-    print("ERROR:", e)
+    print("FATAL ERROR:", e)
     raise
