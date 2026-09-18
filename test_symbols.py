@@ -1,8 +1,8 @@
 import requests
+import time
 
-URL = "https://futures.ourbit.com/api/v1/contract/ticker"
+TICKER_URL = "https://futures.ourbit.com/api/v1/contract/ticker"
 
-# نمادهایی که فعلاً می‌خواهیم از لیست کریپتو حذف کنیم
 non_crypto = {
     "SILVER_USDT",
     "XAU_USDT",
@@ -12,14 +12,13 @@ non_crypto = {
     "SOXL_USDT",
 }
 
-try:
+
+def get_top_100():
 
     response = requests.get(
-        URL,
+        TICKER_URL,
         timeout=30
     )
-
-    print("HTTP:", response.status_code)
 
     response.raise_for_status()
 
@@ -27,25 +26,17 @@ try:
 
     if not result.get("success"):
         raise ValueError(
-            "Ourbit API returned an error"
+            "Ourbit ticker API returned an error"
         )
 
     data = result.get("data", [])
 
-    print()
-    print("========== OURBIT SYMBOLS ==========")
-    print("Total contracts:", len(data))
-
-    # حذف نمادهای غیرکریپتویی
     crypto_data = [
         item
         for item in data
         if item.get("symbol") not in non_crypto
     ]
 
-    print("Crypto contracts:", len(crypto_data))
-
-    # مرتب‌سازی بر اساس ارزش معاملات 24 ساعته
     crypto_data = sorted(
         crypto_data,
         key=lambda x: float(
@@ -54,29 +45,88 @@ try:
         reverse=True
     )
 
-    top_100 = crypto_data[:100]
+    return crypto_data[:100]
 
-    print("Top 100:", len(top_100))
-    print("====================================")
+
+def get_kline(symbol):
+
+    url = (
+        f"https://futures.ourbit.com"
+        f"/api/v1/contract/kline/{symbol}"
+    )
+
+    response = requests.get(
+        url,
+        params={
+            "interval": "Min60"
+        },
+        timeout=30
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    if not result.get("success"):
+        raise ValueError(
+            f"Kline API error for {symbol}"
+        )
+
+    data = result.get("data")
+
+    if not data:
+        raise ValueError(
+            f"No kline data for {symbol}"
+        )
+
+    return data
+
+
+try:
+
+    top_100 = get_top_100()
 
     print()
+    print("========== TOP 5 KLINE TEST ==========")
 
-    print("========== TOP 100 ==========")
-
-    for i, item in enumerate(
-        top_100,
+    for index, item in enumerate(
+        top_100[:5],
         1
     ):
 
-        print(
-            f"{i}. "
-            f"{item.get('symbol')} | "
-            f"amount24={item.get('amount24')}"
+        symbol = item.get("symbol")
+
+        print()
+        print(f"{index}. {symbol}")
+
+        data = get_kline(symbol)
+
+        candle_count = len(
+            data.get("time", [])
         )
 
-    print("==============================")
+        print(
+            "Kline candles:",
+            candle_count
+        )
+
+        print(
+            "Last close:",
+            data.get("close", [])[-1]
+        )
+
+        print("Status: OK")
+
+        # کمی فاصله بین درخواست‌ها
+        time.sleep(1)
+
+    print()
+    print("======================================")
+    print("5 symbols Kline test completed.")
+    print("======================================")
 
 except Exception as e:
 
+    print()
     print("ERROR:", e)
     raise
