@@ -13,25 +13,40 @@ try:
 
     data = result.get("data", [])
 
+    # حذف قراردادهای غیرکریپتویی
+    non_crypto = {
+        "SILVER_USDT",
+        "XAU_USDT",
+        "XAUT_USDT",
+        "AMD_USDT",
+        "GOOGL_USDT",
+        "SOXL_USDT",
+    }
+
+    crypto_data = [
+        item for item in data
+        if item.get("symbol") not in non_crypto
+    ]
+
     # مرتب‌سازی بر اساس ارزش معاملات 24 ساعته
-    data = sorted(
-        data,
+    crypto_data = sorted(
+        crypto_data,
         key=lambda x: float(x.get("amount24", 0)),
         reverse=True
     )
 
-    top_100 = data[:100]
+    top_100 = crypto_data[:100]
 
-    print("========== TOP 100 ==========")
+    print("========== CRYPTO TOP 100 ==========")
     print("Total contracts:", len(data))
-    print("Top 100:", len(top_100))
-    print("==============================")
+    print("Crypto contracts:", len(crypto_data))
+    print("Crypto Top 100:", len(top_100))
+    print("====================================")
 
     for i, item in enumerate(top_100, 1):
         print(
             f"{i}. {item.get('symbol')} | "
-            f"amount24={item.get('amount24')} | "
-            f"volume24={item.get('volume24')}"
+            f"amount24={item.get('amount24')}"
         )
 
 except Exception as e:
