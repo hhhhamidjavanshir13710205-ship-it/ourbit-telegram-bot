@@ -231,20 +231,3 @@ except Exception as e:
 
     print("ERROR:", e)
     raise
-
-بعد Commit changes بزن و Workflow را اجرا کن.
-
-اگر سبز شد، فقط این خطوط را بفرست:
-
-Price:
-Support:
-Resistance:
-Support Distance:
-Resistance Distance:
-RSI14:
-Bullish Divergence:
-Bearish Divergence:
-Bullish Alert:
-Bearish Alert:
-
-بعد از این تست، اگر همه‌چیز درست بود، می‌ریم سراغ Top 100 ارز.
