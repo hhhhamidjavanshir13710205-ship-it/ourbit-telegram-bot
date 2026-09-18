@@ -61,9 +61,7 @@ jobs:
         run: |
           echo "================================"
           echo "OURBIT FUTURES API TEST"
-          echo "================================"
-
-          curl -v \
+        curl -v \
             --connect-timeout 15 \
             --max-time 30 \
             "https://futures.ourbit.com/api/v1/contract/ping" \
@@ -79,6 +77,7 @@ jobs:
       - name: Test Symbols API
         run: |
           python test_symbols.py
-                - name: Test Kline API
+
+      - name: Test Kline API
         run: |
           python test_kline.py
