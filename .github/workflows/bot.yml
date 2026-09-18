@@ -61,7 +61,9 @@ jobs:
         run: |
           echo "================================"
           echo "OURBIT FUTURES API TEST"
-        curl -v \
+          echo "================================"
+
+          curl -v \
             --connect-timeout 15 \
             --max-time 30 \
             "https://futures.ourbit.com/api/v1/contract/ping" \
