@@ -1,7 +1,11 @@
 import requests
 import time
+import pandas as pd
 
 TICKER_URL = "https://futures.ourbit.com/api/v1/contract/ticker"
+
+RSI_PERIOD = 14
+NEAR_PERCENT = 0.3
 
 non_crypto = {
     "SILVER_USDT",
@@ -11,6 +15,79 @@ non_crypto = {
     "GOOGL_USDT",
     "SOXL_USDT",
 }
+
+
+def calculate_rsi(series, period=14):
+
+    delta = series.diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+
+    rs = avg_gain / avg_loss
+
+    return 100 - (100 / (1 + rs))
+
+
+def find_pivots(df, left=3, right=3):
+
+    lows = []
+    highs = []
+
+    for i in range(left, len(df) - right):
+
+        if (
+            df["low"].iloc[i] < df["low"].iloc[i-left:i].min()
+            and
+            df["low"].iloc[i] < df["low"].iloc[i+1:i+right+1].min()
+        ):
+            lows.append(i)
+
+        if (
+            df["high"].iloc[i] > df["high"].iloc[i-left:i].max()
+            and
+            df["high"].iloc[i] > df["high"].iloc[i+1:i+right+1].max()
+        ):
+            highs.append(i)
+
+    return lows, highs
+
+
+def detect_divergence(df):
+
+    pivot_lows, pivot_highs = find_pivots(df)
+
+    bullish = False
+    bearish = False
+
+    if len(pivot_lows) >= 2:
+
+        i1 = pivot_lows[-2]
+        i2 = pivot_lows[-1]
+
+        if (
+            df["low"].iloc[i2] < df["low"].iloc[i1]
+            and
+            df["RSI14"].iloc[i2] > df["RSI14"].iloc[i1]
+        ):
+            bullish = True
+
+    if len(pivot_highs) >= 2:
+
+        i1 = pivot_highs[-2]
+        i2 = pivot_highs[-1]
+
+        if (
+            df["high"].iloc[i2] > df["high"].iloc[i1]
+            and
+            df["RSI14"].iloc[i2] < df["RSI14"].iloc[i1]
+        ):
+            bearish = True
+
+    return bullish, bearish
 
 
 def get_top_100():
@@ -25,27 +102,21 @@ def get_top_100():
     result = response.json()
 
     if not result.get("success"):
-        raise ValueError(
-            "Ourbit ticker API returned an error"
-        )
+        raise ValueError("Ticker API error")
 
     data = result.get("data", [])
 
-    crypto_data = [
-        item
-        for item in data
+    crypto = [
+        item for item in data
         if item.get("symbol") not in non_crypto
     ]
 
-    crypto_data = sorted(
-        crypto_data,
-        key=lambda x: float(
-            x.get("amount24", 0)
-        ),
+    crypto.sort(
+        key=lambda x: float(x.get("amount24", 0)),
         reverse=True
     )
 
-    return crypto_data[:100]
+    return crypto[:100]
 
 
 def get_kline(symbol):
@@ -57,9 +128,7 @@ def get_kline(symbol):
 
     response = requests.get(
         url,
-        params={
-            "interval": "Min60"
-        },
+        params={"interval": "Min60"},
         timeout=30
     )
 
@@ -68,115 +137,155 @@ def get_kline(symbol):
     result = response.json()
 
     if not result.get("success"):
-        raise ValueError(
-            f"Kline API error for {symbol}"
+        raise ValueError(f"Kline error: {symbol}")
+
+    return result.get("data")
+
+
+def analyze(symbol):
+
+    data = get_kline(symbol)
+
+    df = pd.DataFrame({
+        "time": data["time"],
+        "open": data["open"],
+        "high": data["high"],
+        "low": data["low"],
+        "close": data["close"]
+    })
+
+    for col in ["open", "high", "low", "close"]:
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
         )
 
-    data = result.get("data")
+    df = df.dropna()
 
-    if not data:
-        raise ValueError(
-            f"No kline data for {symbol}"
-        )
+    df["RSI14"] = calculate_rsi(
+        df["close"],
+        RSI_PERIOD
+    )
 
-    return data
+    df = df.dropna(
+        subset=["RSI14"]
+    ).reset_index(drop=True)
+
+    recent = df.tail(20)
+
+    price = float(df["close"].iloc[-1])
+    support = float(recent["low"].min())
+    resistance = float(recent["high"].max())
+    rsi = float(df["RSI14"].iloc[-1])
+
+    support_distance = (
+        abs(price - support) / support
+    ) * 100
+
+    resistance_distance = (
+        abs(price - resistance) / resistance
+    ) * 100
+
+    bullish, bearish = detect_divergence(df)
+
+    bullish_alert = (
+        bullish
+        and support_distance <= NEAR_PERCENT
+    )
+
+    bearish_alert = (
+        bearish
+        and resistance_distance <= NEAR_PERCENT
+    )
+
+    return {
+        "symbol": symbol,
+        "price": price,
+        "support": support,
+        "resistance": resistance,
+        "rsi": rsi,
+        "bullish": bullish,
+        "bearish": bearish,
+        "bullish_alert": bullish_alert,
+        "bearish_alert": bearish_alert
+    }
 
 
 try:
 
     top_100 = get_top_100()
 
-    print()
+    success = 0
+    errors = 0
+    alerts = []
+
     print("======================================")
-    print("TOP 100 KLINE TEST")
+    print("FULL TOP 100 ANALYSIS")
     print("======================================")
 
-    success_count = 0
-    error_count = 0
-
-    for index, item in enumerate(
-        top_100,
-        1
-    ):
+    for number, item in enumerate(top_100, 1):
 
         symbol = item.get("symbol")
 
-        print()
-        print(
-            f"[{index}/100] {symbol}"
-        )
-
         try:
 
-            data = get_kline(symbol)
+            result = analyze(symbol)
 
-            candles = len(
-                data.get("time", [])
-            )
-
-            closes = data.get(
-                "close",
-                []
-            )
-
-            if not closes:
-                raise ValueError(
-                    "No close prices"
-                )
-
-            last_close = closes[-1]
+            success += 1
 
             print(
-                "Kline candles:",
-                candles
+                f"[{number}/100] {symbol} | "
+                f"RSI={result['rsi']:.2f} | "
+                f"Bull={result['bullish']} | "
+                f"Bear={result['bearish']}"
             )
 
-            print(
-                "Last close:",
-                last_close
-            )
-
-            print("Status: OK")
-
-            success_count += 1
+            if (
+                result["bullish_alert"]
+                or result["bearish_alert"]
+            ):
+                alerts.append(result)
 
         except Exception as e:
 
-            print(
-                "Status: ERROR"
-            )
+            errors += 1
 
             print(
-                "Error:",
-                e
+                f"[{number}/100] {symbol} ERROR: {e}"
             )
 
-            error_count += 1
-
-        # فاصله بین درخواست‌ها
         time.sleep(1)
 
     print()
     print("======================================")
     print("FINAL RESULT")
     print("======================================")
-    print(
-        "Successful:",
-        success_count
-    )
-    print(
-        "Errors:",
-        error_count
-    )
-    print(
-        "Total:",
-        len(top_100)
-    )
+    print("Successful:", success)
+    print("Errors:", errors)
+    print("Alerts:", len(alerts))
+    print("Total:", len(top_100))
     print("======================================")
 
+    if alerts:
+
+        print()
+        print("========== ALERT CANDIDATES ==========")
+
+        for alert in alerts:
+
+            print(
+                alert["symbol"],
+                "| Price:", alert["price"],
+                "| Support:", alert["support"],
+                "| Resistance:", alert["resistance"],
+                "| RSI:", alert["rsi"],
+                "| Bull:", alert["bullish"],
+                "| Bear:", alert["bearish"]
+            )
+
+        print("======================================")
 
 except Exception as e:
 
-    print()
     print("FATAL ERROR:", e)
     raise
